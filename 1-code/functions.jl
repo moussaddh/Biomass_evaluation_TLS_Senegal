@@ -199,19 +199,23 @@ function compute_all_mtg_data(mtg_file, new_mtg_file, csv_file)
 
     transform!(
         mtg,
-        :length_mm => :length,
         :mass_dry_sample_g => :dry_weight,
         :mass_g => :fresh_mass, # total mass of the branch
     )
 
     transform!(mtg, [:dry_weight, :volume_sample_cm3] => ((x, y) -> x / y) => :density, symbol="S", ignore_nothing=true)
     transform!(mtg, [:mass_fresh_sample_g, :volume_sample_cm3] => ((x, y) -> x / y) => :density_fresh, symbol="S", ignore_nothing=true)
-    transform!(mtg, :circonference_mm => (x -> x / π) => :diameter, symbol="S", ignore_nothing=true) # diameter of the segment in mm
-    transform!(mtg, :diameter_mm => :diameter, symbol="S") # diameter of the segment in mm
+    transform!(mtg, :circonference_mm => (x -> x / π) => :diameter, ignore_nothing=true) # diameter of the segment in mm
 
-    # Compute extra data:
-    compute_data_mtg(mtg)
+    if length(mtg) > 3
+        # These are the complete mtgs, with the full topology and dimensions.
+        # The others are only partial mtgs with the total biomass.
+        transform!(mtg, :length_mm => :length)
+        transform!(mtg, :diameter_mm => :diameter, symbol="S") # diameter of the segment in mm
 
+        # Compute extra data:
+        compute_data_mtg(mtg)
+    end
     # write the resulting mtg to disk:
     write_mtg(new_mtg_file, mtg)
 
@@ -221,12 +225,15 @@ function compute_all_mtg_data(mtg_file, new_mtg_file, csv_file)
             mtg,
             [
                 :density, :density_fresh, :length, :diameter, :axis_length, :branching_order,
-                :segment_index_on_axis, :mass_g, :volume, :volume_subtree, :cross_section,
+                :segment_index_on_axis, :fresh_mass, :volume, :volume_subtree, :cross_section,
                 :cross_section_children, :cross_section_leaves, :n_segments_axis,
                 :number_leaves, :pathlength_subtree, :segment_subtree,
                 :cross_section_pipe, :cross_section_pipe_50, :nleaf_proportion_siblings,
                 :nleaves_siblings, :cross_section_all, :comment, :id_cor
             ])
+
+    # Remove columns that contain only missing values:
+    select!(df, Not(names(df, Missing)))
 
     CSV.write(csv_file, df[:, Not(:tree)])
 end

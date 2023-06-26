@@ -41,22 +41,73 @@ Defining the colors for the plot:
 # ╔═╡ 6bee7b4a-c3a1-4562-a17f-71335b8d39ae
 colors = ["Stat. model" => ColorSchemes.Set2_5.colors[1], "Pipe model" => ColorSchemes.Set2_5.colors[2], "Plantscan3d" => ColorSchemes.Set2_5.colors[3]]
 
-# ╔═╡ 6b8d93de-2fb4-411d-befe-29cb29132b40
+# ╔═╡ 220dfbff-15fc-4e75-a6a2-39e60c08e8dc
 md"""
-Listing the input MTG files:
+Importing the data from all MTGs, either with the full topology and dimensions, or just the branch fresh mass, base diameter and density.
 """
 
-# ╔═╡ 796a13d2-a65c-46f6-ad42-5fd42811c8a8
-csv_files =
+# ╔═╡ 492fc741-7a3b-4992-a453-fcac2bbf35ad
+df = let 
+	csv_files =
     filter(
         x -> endswith(x, ".csv"), # all MTGs
         # x -> endswith(x, r"tree[1,3].\.csv"), # train only on 2020 MTGs
         readdir(joinpath("../0-data", "1.2-mtg_manual_measurement_corrected_enriched"), join=true)
 	) 
 
-# ╔═╡ 220dfbff-15fc-4e75-a6a2-39e60c08e8dc
+	dfs = []
+    for i in csv_files
+        df_i = CSV.read(i, DataFrame, select = [:id, :symbol, :fresh_mass, :diameter, :density_fresh, :density, :comment])
+        df_i[:, :branch] .= splitext(basename(i))[1]
+
+        transform!(
+            df_i,
+            :branch => ByRow(x -> replace(split.(x, "_")[end], "EC" => "")) => :tree
+        )
+
+        rename!(
+            df_i,
+            :branch => :unique_branch
+        )
+
+        transform!(
+            df_i,
+            :unique_branch => ByRow(x -> x[end]) => :branch
+        )
+
+		# Some branches don't have density measurements, we set it to missing:
+		if !hasproperty(df_i, :density_fresh)
+        	df_i[!, :density_fresh] .= missing
+    	end
+
+		if !hasproperty(df_i, :density)
+        	df_i[!, :density] .= missing
+    	end
+
+		if !hasproperty(df_i, :comment)
+        	df_i[!, :comment] .= ""
+    	end
+		
+        push!(dfs, df_i)
+    end
+
+    df = dfs[1]
+    for i in 2:length(dfs)
+        df = vcat(df, dfs[i])
+    end
+	
+    filter!(x -> ismissing(x.comment) || !(x.comment in ["casse", "CASSE", "broken", "AVORTE", "Portait aussi un axe peut-être cassé lors de la manip"]), df)
+    filter!(y -> y.symbol == "S" || y.symbol == "B", df)
+    # Remove this segment because we probably measured it wrong (or on a protrusion), it has a circonference of 220 mm while its predecessor has 167 mm and successor 163 mm.
+    filter!(row -> !(row.tree == "1561" && row.id == 6), df)
+    
+	df.unique_branch = lowercase.(df.unique_branch)
+	df
+end
+
+# ╔═╡ 75e8003d-709a-4bec-8829-979230468e33
 md"""
-Importing the data into a common DataFrame:
+Importing the data with the full topology and dimensions into a `DataFrame`. This data is used to define the statistical model.
 """
 
 # ╔═╡ 068bccf7-7d01-40f5-b06b-97f6f51abcdd
@@ -76,7 +127,8 @@ First, we define which variables will be used in our model. In our case we will 
 """
 
 # ╔═╡ 3d0a6b24-f11b-4f4f-b59b-5c40ea9be838
-formula_all = @formula(cross_section ~ 0 + cross_section_pipe + pathlength_subtree)
+#formula_all = @formula(cross_section ~ 0 + cross_section_pipe + pathlength_subtree)
+formula_all = @formula(cross_section ~ 0 + cross_section_pipe +  segment_index_on_axis + axis_length)
 #formula_all = @formula(cross_section ~ 0 + cross_section_pipe + pathlength_subtree + branching_order + segment_index_on_axis + axis_length + number_leaves + segment_subtree + n_segments_axis)
 
 # ╔═╡ b8800a04-dedb-44b3-82fe-385e3db1d0d5
@@ -132,6 +184,29 @@ md"""
 Importing the wood density data
 """
 
+# ╔═╡ ecbcba9b-da36-4733-bc61-334c12045b0e
+df_density = let
+    df_density_fresh = combine(
+		groupby(df, :unique_branch),
+        :density_fresh => (x -> mean(skipmissing(x))) => :fresh_density,
+        :density_fresh => (x -> std(skipmissing(x))) => :fresh_density_sd,
+    )
+	
+    df_density_dry = combine(
+        groupby(df, :unique_branch),
+        :density => (x -> mean(skipmissing(x))) => :dry_density,
+        :density => (x -> std(skipmissing(x))) => :dry_density_sd,
+    )
+
+	# Put missing densities to the average value:
+	df_density_fresh.fresh_density[isnan.(df_density_fresh.fresh_density)] .= mean(filter(x -> !isnan(x), df_density_fresh.fresh_density))
+	df_density_fresh.fresh_density_sd[isnan.(df_density_fresh.fresh_density_sd)] .= mean(filter(x -> !isnan(x), df_density_fresh.fresh_density_sd))
+	df_density_dry.dry_density[isnan.(df_density_dry.dry_density)] .= mean(filter(x -> !isnan(x), df_density_dry.dry_density))
+	df_density_dry.dry_density_sd[isnan.(df_density_dry.dry_density_sd)] .= mean(filter(x -> !isnan(x), df_density_dry.dry_density_sd))
+
+    leftjoin(df_density_fresh, df_density_dry, on=:unique_branch)
+end
+
 # ╔═╡ f26a28b2-d70e-4543-b58e-2d640c2a0c0d
 md"""
 Importing the MTG files
@@ -140,17 +215,14 @@ Importing the MTG files
 # ╔═╡ 9290e9bf-4c43-47c7-96ec-8b44ad3c6b23
 begin
     dir_path_lidar = joinpath("..", "0-data", "3-mtg_lidar_plantscan3d", "4-corrected_segmentized")
-    #dir_path_lidar_raw = joinpath("..", "0-data", "3-mtg_lidar_plantscan3d", "4-raw_output_segmentized")
     dir_path_lidar_raw = nothing
     dir_path_manual = joinpath("..", "0-data", "1.2-mtg_manual_measurement_corrected_enriched")
     dir_path_lidar_new = joinpath("..", "0-data", "3-mtg_lidar_plantscan3d", "5-corrected_enriched")
-    #mtg_files =
-    #    filter(
-    #        x -> splitext(basename(x))[2] in [".mtg"],
-    #        readdir(dir_path_lidar)
-    #    )
-
-    mtg_files = ["fa_g1_1561.mtg", "fa_g1_tower12.mtg", "fa_g2_1538.mtg", "fa_g2_1606.mtg", "Tree_EC5.mtg"]
+    mtg_files =
+        filter(
+            x -> splitext(basename(x))[2] in [".mtg"],
+            readdir(dir_path_lidar)
+       )
 end
 
 # ╔═╡ 466aa3b3-4c78-4bb7-944d-5d55128f8cf6
@@ -168,43 +240,20 @@ md"""
 #### Fresh mass
 """
 
-# ╔═╡ b710e330-e783-48f7-bebe-4257e7fec385
+# ╔═╡ c9090d58-4fd6-4b4c-ad14-bf2f611cccfd
 md"""
-Computing the cross-section, volumes and biomass of the whole trees 
+Making the same plot but separating the branches that were used for model training and model validation:
 """
 
-# ╔═╡ db44b868-f9b8-466a-b13e-274ad9b9d74a
-# ╠═╡ disabled = true
-#=╠═╡
-trees = 
-	filter(
-        x -> endswith(x, ".mtg"),
-        readdir("../0-data/3-mtg_lidar_plantscan3d/8-tree_scale_segmentized", join=true)
-    )
-  ╠═╡ =#
+# ╔═╡ 42dc6f96-c947-476c-8073-cfe98733836c
+md"""
+Computing the statistics about model prediction of the branches fresh mass:
+"""
 
-# ╔═╡ a6ea9696-d778-4033-a7df-76da4ea1f5fe
-#=╠═╡
-for i in trees
-	tree = match(r"[0-9]+", basename(i)).match
-	println("Computing tree $tree")
-
-	# Get the density for a tree:
-	df_density_tree = df_density[replace.(df_density.branches, r"[a-z]" => "") .== tree,:]
-
-	# Compute the average per tree:
-	dry_density = mean(df_density_tree.dry_density)
-	fresh_density = mean(df_density_tree.fresh_density)
-
-	# Import its MTG (computed from plantscan3d):
-	mtg_tree = read_mtg(i)
-
-    compute_data_mtg_tree!(mtg_tree, fresh_density, dry_density)
-
-	# Write the computed LiDAR MTG to disk:
-	write_mtg(joinpath("../0-data/3-mtg_lidar_plantscan3d/9-tree_scale_segmentized_enriched",basename(i)), mtg_tree)
-end
-  ╠═╡ =#
+# ╔═╡ b62964a9-59e8-478f-b30a-2513b6291e67
+md"""
+More global assessment:
+"""
 
 # ╔═╡ 30f8608f-564e-4ffc-91b2-1f104fb46c1e
 md"""
@@ -279,9 +328,9 @@ function bind_csv_files(csv_files)
 
         transform!(
             df_i,
-            :branch => ByRow(x -> x[5:end-1]) => :tree
+            :branch => ByRow(x -> replace(split.(x, "_")[end], "EC" => "")) => :tree
         )
-
+		
         rename!(
             df_i,
             :branch => :unique_branch
@@ -302,14 +351,16 @@ function bind_csv_files(csv_files)
     return df
 end
 
-
-# ╔═╡ 492fc741-7a3b-4992-a453-fcac2bbf35ad
-df = let
-    x = dropmissing(bind_csv_files(csv_files), :cross_section)
-    filter!(x -> ismissing(x.comment) || !(x.comment in ["casse", "CASSE", "broken", "AVORTE", "Portait aussi un axe peut-être cassé lors de la manip"]), x)
-    filter!(y -> y.symbol == "S", x)
-    # Remove this segment because we probably measured it wrong (or on a protrusion), it has a circonference of 220 mm while its predecessor has 167 mm and successor 163 mm.
-    filter!(row -> !(row.tree == "1_156" && row.id == 6), x)
+# ╔═╡ 7e58dc6e-78ec-4ff3-8e99-97756c3a8914
+df_training = let
+	# Define manually which branches were measured for the full topology and dimensions:
+	full_mtg_files = ["fa_g1_1561.csv", "fa_g1_tower12.csv", "fa_g2_1538.csv", "fa_g2_1606.csv", "tree_EC5.csv"]
+	csv_files = [joinpath("../0-data", "1.2-mtg_manual_measurement_corrected_enriched", i) for i in full_mtg_files]
+	x = dropmissing(bind_csv_files(csv_files), :cross_section)
+	    filter!(x -> ismissing(x.comment) || !(x.comment in ["casse", "CASSE", "broken", "AVORTE", "Portait aussi un axe peut-être cassé lors de la manip"]), x)
+	    filter!(y -> y.symbol == "S", x)
+	    # Remove this segment because we probably measured it wrong (or on a protrusion), it has a circonference of 220 mm while its predecessor has 167 mm and successor 163 mm.
+    filter!(row -> !(row.tree == "1561" && row.id == 6), x)
     x
 end
 
@@ -324,12 +375,12 @@ begin
     end
 
     # Sample size
-    const n = size(df, 1)
+    const n = size(df_training, 1)
     Random.seed!(1234)
     # cross validation
     scores = cross_validate(
-        inds -> lm(formula_all, df[inds, :]),        # training function
-        (mod, inds) -> compute_rmse(mod, df[inds, :]),  # evaluation function
+        inds -> lm(formula_all, df_training[inds, :]),        # training function
+        (mod, inds) -> compute_rmse(mod, df_training[inds, :]),  # evaluation function
         n,              # total number of samples
         Kfold(n, 10)    # 10-fold cross validation plan
     )
@@ -339,14 +390,11 @@ begin
     "nRMSE: $m ± sd $s"
 end
 
-# ╔═╡ b68a113d-3f80-4e50-ba77-f62297431463
-df_mod = filter!(y -> y.unique_branch != "fa_g1_1561" && y.id != 6, deepcopy(df)); # We remove one point for the training that is probably an error as it has a very large diameter (7cm) compared to its bearer (5cm) and follower (5cm too)
-
 # ╔═╡ aaa829ee-ec36-4116-8424-4b40c581c2fc
-model = lm(formula_all, df_mod)
+model = lm(formula_all, df_training)
 
 # ╔═╡ b49c4235-a09e-4b8c-a392-d423d7ed7d4c
-df_all = let x = deepcopy(df)
+df_all = let x = deepcopy(df_training)
     x[:, "Stat. mod."] = predict(model, x)
     rename!(x, Dict(:cross_section_pipe => "Pipe mod."))
     stack(
@@ -387,22 +435,6 @@ begin
             [:cross_section_pred, :cross_section] => RME => :RME
         )
     sort(stats_all, :nRMSE)
-end
-
-# ╔═╡ ecbcba9b-da36-4733-bc61-334c12045b0e
-df_density = let
-    df_density_fresh = combine(
-        groupby(dropmissing(df, :density_fresh), :unique_branch),
-        :density_fresh => mean => :fresh_density,
-        :density_fresh => std => :fresh_density_sd,
-    )
-    df_density_dry = combine(
-        groupby(dropmissing(df, :density), :unique_branch),
-        :density => mean => :dry_density,
-        :density => std => :dry_density_sd,
-    )
-
-    leftjoin(df_density_fresh, df_density_dry, on=:unique_branch)
 end
 
 # ╔═╡ d7a3c496-0ef0-454b-9e32-e5835928f4d5
@@ -534,11 +566,14 @@ function compute_data_mtg_lidar!(mtg, fresh_density, dry_density, model)
 
     transform!(mtg, (x -> cross_section_stat_mod(x, model)) => :cross_section_stat_mod, symbol="S")
 
+	# we force the first segment to stay at measurement:
+    mtg[1][1][:cross_section_stat_mod] = mtg[1][1][:cross_section_pipe]
+
     transform!(mtg,
         [:cross_section_stat_mod, :length] => ((x, y) -> x * y) => :volume_stat_mod,
         symbol="S"
     )
-
+	
     mtg[:volume_ps3d] = sum(descendants(mtg, :volume_ps3d, symbol="S"))
     mtg[:volume_stat_mod] = sum(descendants(mtg, :volume_stat_mod, symbol="S"))
     mtg[:volume_pipe] = sum(descendants(mtg, :volume_pipe, symbol="S"))
@@ -559,6 +594,7 @@ end
 
 # ╔═╡ 97871566-4904-4b40-a631-98f7e837a2f4
 function compute_volume_model(branch, dir_path_lidar, dir_path_manual, df_density, model)
+	branch = lowercase(branch)
     # Compute the average density:
 	if branch in df_density.unique_branch
     dry_density = filter(x -> x.unique_branch == branch, df_density).dry_density[1]
@@ -571,10 +607,17 @@ function compute_volume_model(branch, dir_path_lidar, dir_path_manual, df_densit
     # Importing the mtg from the manual measurement data:
     mtg_manual = read_mtg(joinpath(dir_path_manual, branch * ".mtg"))
     # Re-estimate the volume of the branch from the volume of its segments:
-    mtg_manual[:volume] = sum(descendants!(mtg_manual, :volume, symbol="S"))
+	vols = descendants!(mtg_manual, :volume, symbol="S")
+    if !all(isnothing.(vols))
+        mtg_manual[:volume] = sum(vols)
+    end
 
     mtg_lidar_model = read_mtg(joinpath(dir_path_lidar, branch * ".mtg"))
 
+	# We take the first value of the cross-section as the one from the measurement:
+	mtg_lidar_model[1][1][:diameter] = first(descendants(mtg_manual, :diameter, self=true))
+	#NB: this is because the cross-section of the branches are not well estimated using ps3d already (we know that already), but it will be well estimated at tree scale because the diameter of the tree is way larger.
+	
     compute_data_mtg_lidar!(mtg_lidar_model, fresh_density, dry_density, model)
 
     return (mtg_manual, mtg_lidar_model)
@@ -625,12 +668,13 @@ df_evaluations = summarize_data(mtg_files, dir_path_lidar, dir_path_manual, dir_
 begin
 	df_vol = DataFrames.stack(select(df_evaluations, :branch, Cols(x -> startswith(x, "volume"))), Not([:branch, :volume_manual]))
 	df_mass = DataFrames.stack(select(df_evaluations, :branch, Cols(x -> startswith(x, "fresh"))), Not([:branch, :fresh_mass_manual]))
+	df_mass.origin .= [i in ["fa_g1_1561", "fa_g1_tower12", "fa_g2_1538", "fa_g2_1606", "Tree_EC5"] ? "Training" : "Validation" for i in df_mass.branch]
 end;
 
 # ╔═╡ 36315f52-fdb4-4872-9bcb-f5f8a9e1fb60
 let
 	#df_ = filter(x -> x.variable != "volume_ps3d", df_vol)
-	df_ = df_vol
+	df_ = filter(x -> !isnothing(x.volume_manual), df_vol)
     plt_volume_branches =
         data(df_) *
         (
@@ -665,6 +709,51 @@ let
             visual(Scatter, markersize=20, alpha=0.8)
         )
     p_mass = draw(plt_mass_branches, palettes=(; color=colors))
+end
+
+# ╔═╡ 9dd9d67b-7856-43e1-9859-76a5463428ce
+let
+    plt_mass_branches =
+        data(df_mass) *
+        (
+            mapping(
+                :fresh_mass_manual => "Measured fresh mass (g)",
+                :fresh_mass_manual => "Predicted fresh mass (g)") * visual(Lines) +
+            mapping(
+                :fresh_mass_manual => "Measured fresh mass (g)",
+                :value => "Predicted fresh mass (g)",
+                color=:variable => (x -> rename_var(replace(x, "fresh_mass_" => ""))) => "Model",
+                marker=:origin => "Branch"
+			) *
+            visual(Scatter, markersize=20, alpha=0.8)
+        )
+    p_mass = draw(plt_mass_branches, palettes=(; color=colors))
+end
+
+# ╔═╡ 8239f0f5-041e-47d0-9623-570c4acf542e
+let
+    stats_mass =
+        combine(
+            groupby(df_mass, [:variable, :origin]),
+            [:value, :fresh_mass_manual] => nRMSE => :nRMSE,
+            [:value, :fresh_mass_manual]  => EF => :EF,
+            [:value, :fresh_mass_manual] => Bias => :Bias,
+            [:value, :fresh_mass_manual] => RME => :RME
+        )
+    sort(stats_mass, [:origin, :nRMSE])
+end
+
+# ╔═╡ dafd1d8c-bb3e-4862-a4d9-c235193fe850
+let
+    stats_mass =
+        combine(
+            groupby(df_mass, [:variable]),
+            [:value, :fresh_mass_manual] => nRMSE => :nRMSE,
+            [:value, :fresh_mass_manual]  => EF => :EF,
+            [:value, :fresh_mass_manual] => Bias => :Bias,
+            [:value, :fresh_mass_manual] => RME => :RME
+        )
+    sort(stats_mass, :nRMSE)
 end
 
 # ╔═╡ 666e9daf-e28f-4e14-b52a-bcc6b5aadb67
@@ -2346,10 +2435,10 @@ version = "3.5.0+0"
 # ╟─3506b454-fb9c-4632-8dfb-15804b66add2
 # ╟─8b711c1e-7d4e-404b-b2c8-87f536728fee
 # ╠═6bee7b4a-c3a1-4562-a17f-71335b8d39ae
-# ╟─6b8d93de-2fb4-411d-befe-29cb29132b40
-# ╟─796a13d2-a65c-46f6-ad42-5fd42811c8a8
 # ╟─220dfbff-15fc-4e75-a6a2-39e60c08e8dc
-# ╠═492fc741-7a3b-4992-a453-fcac2bbf35ad
+# ╟─492fc741-7a3b-4992-a453-fcac2bbf35ad
+# ╟─75e8003d-709a-4bec-8829-979230468e33
+# ╟─7e58dc6e-78ec-4ff3-8e99-97756c3a8914
 # ╟─068bccf7-7d01-40f5-b06b-97f6f51abcdd
 # ╟─0b8d39b2-9255-4bd7-a02f-2cc055bf61fd
 # ╟─fa9cf6f4-eb79-4c70-ba1f-4d80b3c3e62a
@@ -2357,12 +2446,11 @@ version = "3.5.0+0"
 # ╟─b8800a04-dedb-44b3-82fe-385e3db1d0d5
 # ╟─68fdcbf2-980a-4d44-b1f9-46b8fcd5bea1
 # ╟─bde004a8-d54c-4049-98f6-87c579785641
-# ╠═b68a113d-3f80-4e50-ba77-f62297431463
 # ╟─a7bf20e9-211c-4161-a5d2-124866afa76e
 # ╠═aaa829ee-ec36-4116-8424-4b40c581c2fc
 # ╟─f2eb6a9d-e788-46d0-9957-1bc22a98ad5d
 # ╟─b49c4235-a09e-4b8c-a392-d423d7ed7d4c
-# ╠═d587f110-86d5-41c0-abc7-2671d711fbdf
+# ╟─d587f110-86d5-41c0-abc7-2671d711fbdf
 # ╟─e2f20d4c-77d9-4b95-b30f-63febb7888c3
 # ╟─dc2bd8f0-c321-407f-9592-7bcdf45f9634
 # ╟─3944b38d-f45a-4ff9-8348-98a8e04d4ad1
@@ -2373,15 +2461,18 @@ version = "3.5.0+0"
 # ╟─f26a28b2-d70e-4543-b58e-2d640c2a0c0d
 # ╠═9290e9bf-4c43-47c7-96ec-8b44ad3c6b23
 # ╟─466aa3b3-4c78-4bb7-944d-5d55128f8cf6
-# ╟─87140df4-3fb5-443c-a667-be1f19b016f6
+# ╠═87140df4-3fb5-443c-a667-be1f19b016f6
 # ╠═915ba9a6-3ee8-4605-a796-354e7c293f55
 # ╟─a3fef18c-b3c7-4a67-9876-6af3a1968afe
 # ╟─36315f52-fdb4-4872-9bcb-f5f8a9e1fb60
 # ╟─0409c90e-fc40-4f02-8805-9feb6a7f8eb9
 # ╟─fa2acb23-a9f7-4324-99e4-923b0811591f
-# ╟─b710e330-e783-48f7-bebe-4257e7fec385
-# ╠═db44b868-f9b8-466a-b13e-274ad9b9d74a
-# ╠═a6ea9696-d778-4033-a7df-76da4ea1f5fe
+# ╟─c9090d58-4fd6-4b4c-ad14-bf2f611cccfd
+# ╟─9dd9d67b-7856-43e1-9859-76a5463428ce
+# ╟─42dc6f96-c947-476c-8073-cfe98733836c
+# ╟─8239f0f5-041e-47d0-9623-570c4acf542e
+# ╟─b62964a9-59e8-478f-b30a-2513b6291e67
+# ╟─dafd1d8c-bb3e-4862-a4d9-c235193fe850
 # ╟─30f8608f-564e-4ffc-91b2-1f104fb46c1e
 # ╟─0a19ac96-a706-479d-91b5-4ea3e091c3e8
 # ╟─5dc0b0d9-dde6-478b-9bee-b9503a3a4d82
@@ -2407,6 +2498,6 @@ version = "3.5.0+0"
 # ╟─d17d7e96-bd15-4a79-9ccb-6182e7d7c023
 # ╟─27a0dcef-260c-4a0c-bef3-04a7d1b79805
 # ╟─666e9daf-e28f-4e14-b52a-bcc6b5aadb67
-# ╠═073e32dd-c880-479c-8933-d53c9655a04d
+# ╟─073e32dd-c880-479c-8933-d53c9655a04d
 # ╟─00000000-0000-0000-0000-000000000001
 # ╟─00000000-0000-0000-0000-000000000002
