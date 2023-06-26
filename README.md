@@ -77,3 +77,8 @@ The results are all stored in the `2-results` folder. They are divided into thre
 - output data (`1-data`): computed data, final results of computations and analyses
 - figures (`2-plots`): most interesting plots resulting from analyses
 - reports (`3-reports`): outputs from the `Pluto.jl` notebooks.
+
+
+## Notes
+
+- Plantscan3D sometimes cannot compute the radius of a node and returns a `NaN`. In that case it is replaced by 0.0, which is the same as removing the node.

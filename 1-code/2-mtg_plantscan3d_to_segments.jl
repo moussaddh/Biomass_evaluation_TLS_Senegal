@@ -6,7 +6,6 @@
 
 # Script set-up -----------------------------------------------------------
 
-# using Pkg; Pkg.add(url = "https://github.com/VEZY/MultiScaleTreeGraph.jl", rev = "master")
 using Revise
 
 includet("./functions.jl")
@@ -26,6 +25,6 @@ segmentize_mtgs(
 
 # Tree scale:
 segmentize_mtgs(
-    "0-data/3-mtg_lidar_plantscan3d/7-tree_scale",
-    "0-data/3-mtg_lidar_plantscan3d/8-tree_scale_segmentized"
+    "0-data/3-mtg_lidar_plantscan3d/0-raw_output_tree",
+    "0-data/3-mtg_lidar_plantscan3d/7-tree_scale_segmentized"
 )

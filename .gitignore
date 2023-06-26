@@ -45,3 +45,5 @@ vignettes/*.pdf
 !/2-results/**/.keep
 
 Manifest.toml
+
+.DS_Store
