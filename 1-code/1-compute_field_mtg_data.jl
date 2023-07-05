@@ -38,3 +38,17 @@ for i in mtg_files
         joinpath("0-data", "1.2-mtg_manual_measurement_corrected_enriched", splitext(basename(i))[1] * ".csv"),
     )
 end
+
+@show a
+@edit read_mtg(mtg_files[1])
+@edit mean([1 1; 2 2])
+@edit sum([1 1; 2 2])
+
+
+truc(1, 2)
+
+truc(1, 2)
+
+BiomassFromLiDAR.toto(1, 2)
+
+BiomassFromLiDAR.toto(1, "2")

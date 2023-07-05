@@ -82,3 +82,5 @@ The results are all stored in the `2-results` folder. They are divided into thre
 ## Notes
 
 - Plantscan3D sometimes cannot compute the radius of a node and returns a `NaN`. In that case it is replaced by 0.0, which is the same as removing the node.
+- For the evaluation of the model on the validation data only, we should change the type of points according to the method of biomass evaluation, either from volume * measured average density of the branch, or using the average wood density of the other branches when the density was not measured.
+- Add leaves on the trees based on the measurement of leaf location in the branch on one branch mtg.

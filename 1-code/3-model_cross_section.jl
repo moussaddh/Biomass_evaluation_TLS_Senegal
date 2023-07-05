@@ -245,6 +245,11 @@ md"""
 Making the same plot but separating the branches that were used for model training and model validation:
 """
 
+# ╔═╡ 7fdbd52d-969f-47e5-9628-4de6077c8ff3
+md"""
+And using only the validation data:
+"""
+
 # ╔═╡ 42dc6f96-c947-476c-8073-cfe98733836c
 md"""
 Computing the statistics about model prediction of the branches fresh mass:
@@ -724,6 +729,25 @@ let
                 :value => "Predicted fresh mass (g)",
                 color=:variable => (x -> rename_var(replace(x, "fresh_mass_" => ""))) => "Model",
                 marker=:origin => "Branch"
+			) *
+            visual(Scatter, markersize=20, alpha=0.8)
+        )
+    p_mass = draw(plt_mass_branches, palettes=(; color=colors))
+end
+
+# ╔═╡ 4dcd6a1e-ebc9-43df-a4c0-6a7702d1491e
+let
+    plt_mass_branches =
+        data(filter(row -> row.origin == "Validation", df_mass)) *
+        (
+            mapping(
+                :fresh_mass_manual => "Measured fresh mass (g)",
+                :fresh_mass_manual => "Predicted fresh mass (g)") * visual(Lines) +
+            mapping(
+                :fresh_mass_manual => "Measured fresh mass (g)",
+                :value => "Predicted fresh mass (g)",
+                color=:variable => (x -> rename_var(replace(x, "fresh_mass_" => ""))) => "Model",
+                #marker=:origin => "Branch"
 			) *
             visual(Scatter, markersize=20, alpha=0.8)
         )
@@ -2469,6 +2493,8 @@ version = "3.5.0+0"
 # ╟─fa2acb23-a9f7-4324-99e4-923b0811591f
 # ╟─c9090d58-4fd6-4b4c-ad14-bf2f611cccfd
 # ╟─9dd9d67b-7856-43e1-9859-76a5463428ce
+# ╟─7fdbd52d-969f-47e5-9628-4de6077c8ff3
+# ╟─4dcd6a1e-ebc9-43df-a4c0-6a7702d1491e
 # ╟─42dc6f96-c947-476c-8073-cfe98733836c
 # ╟─8239f0f5-041e-47d0-9623-570c4acf542e
 # ╟─b62964a9-59e8-478f-b30a-2513b6291e67

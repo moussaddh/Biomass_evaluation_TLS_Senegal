@@ -10,7 +10,7 @@ export compute_all_mtg_data
 export bind_csv_files
 export segmentize_mtgs
 export compute_volume, compute_var_axis
-export NRMSE, RMSE, EF, nRMSE
+export RMSE, EF, nRMSE
 export compute_volume_model, volume_stats
 
 ###############################################
@@ -668,5 +668,4 @@ function volume_stats(mtg_manual, mtg_lidar_ps3d_raw, mtg_lidar_model, df_densit
         prediction=[tot_lenght_lidar, tot_lenght_lidar_raw, tot_vol_lidar, tot_vol_lidar_raw, tot_vol_lidar_stat_mod, tot_vol_lidar_pipe_mod, tot_vol_lidar_stat_mod_raw, tot_vol_lidar_pipe_mod_raw, fresh_biomass_lidar, fresh_biomass_lidar_raw, fresh_biomass_lidar_stat_mod, fresh_biomass_lidar_pipe_mod, fresh_biomass_lidar_stat_mod_raw, fresh_biomass_lidar_pipe_mod_raw]
     )
 end
-
 end
