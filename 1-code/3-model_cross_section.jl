@@ -15,6 +15,7 @@ begin
     using Random
     using AlgebraOfGraphics
     using CairoMakie
+	using Colors
     using ColorSchemes
     using MLBase
 end
@@ -198,14 +199,25 @@ df_density = let
         :density => (x -> std(skipmissing(x))) => :dry_density_sd,
     )
 
+	df_density_fresh.measured_fresh_density .= true
+	df_density_dry.measured_dry_density .= true
+
 	# Put missing densities to the average value:
+	df_density_fresh.measured_fresh_density[isnan.(df_density_fresh.fresh_density)] .= false
 	df_density_fresh.fresh_density[isnan.(df_density_fresh.fresh_density)] .= mean(filter(x -> !isnan(x), df_density_fresh.fresh_density))
+	
 	df_density_fresh.fresh_density_sd[isnan.(df_density_fresh.fresh_density_sd)] .= mean(filter(x -> !isnan(x), df_density_fresh.fresh_density_sd))
+	
+	df_density_dry.measured_dry_density[isnan.(df_density_dry.dry_density)] .= false
 	df_density_dry.dry_density[isnan.(df_density_dry.dry_density)] .= mean(filter(x -> !isnan(x), df_density_dry.dry_density))
+
 	df_density_dry.dry_density_sd[isnan.(df_density_dry.dry_density_sd)] .= mean(filter(x -> !isnan(x), df_density_dry.dry_density_sd))
 
     leftjoin(df_density_fresh, df_density_dry, on=:unique_branch)
 end
+
+# ╔═╡ c27512cc-9c75-4dcf-9e5a-79c49e4ba478
+CSV.write("../2-results/1-data/0-wood_density.csv", df_density)
 
 # ╔═╡ f26a28b2-d70e-4543-b58e-2d640c2a0c0d
 md"""
@@ -258,6 +270,11 @@ Computing the statistics about model prediction of the branches fresh mass:
 # ╔═╡ b62964a9-59e8-478f-b30a-2513b6291e67
 md"""
 More global assessment:
+"""
+
+# ╔═╡ ddb4f5a5-5e2b-43a1-8e3f-09c3dad8870f
+md"""
+Same plot but showing which branch density was measured or not:
 """
 
 # ╔═╡ 30f8608f-564e-4ffc-91b2-1f104fb46c1e
@@ -398,6 +415,9 @@ end
 # ╔═╡ aaa829ee-ec36-4116-8424-4b40c581c2fc
 model = lm(formula_all, df_training)
 
+# ╔═╡ 4dd53a56-05dd-4244-862c-24ebaef45d52
+CSV.write("../2-results/1-data/4-structural_model.csv", coeftable(model))
+
 # ╔═╡ b49c4235-a09e-4b8c-a392-d423d7ed7d4c
 df_all = let x = deepcopy(df_training)
     x[:, "Stat. mod."] = predict(model, x)
@@ -412,7 +432,7 @@ df_all = let x = deepcopy(df_training)
 end;
 
 # ╔═╡ d587f110-86d5-41c0-abc7-2671d711fbdf
-begin
+article_figure_CSA = begin
     plt_cs_all =
         data(df_all) *
         (
@@ -429,8 +449,11 @@ begin
     p = draw(plt_cs_all, palettes=(; color=colors))
 end
 
+# ╔═╡ f9e07eb8-8457-48cc-a5f9-7ebb06bbfe81
+save("../2-results/2-plots/cross_section_evaluation.png", article_figure_CSA; px_per_unit=3)
+
 # ╔═╡ dc2bd8f0-c321-407f-9592-7bcdf45f9634
-begin
+stats_cross_section = begin
     stats_all =
         combine(
             groupby(df_all, [:origin]),
@@ -441,6 +464,9 @@ begin
         )
     sort(stats_all, :nRMSE)
 end
+
+# ╔═╡ b14476ab-f70b-4c22-a321-b339f94ad219
+CSV.write("../2-results/1-data/2-stats_cross_section.csv", stats_cross_section)
 
 # ╔═╡ d7a3c496-0ef0-454b-9e32-e5835928f4d5
 function compute_cross_section_all(x, var=:cross_section)
@@ -717,7 +743,7 @@ let
 end
 
 # ╔═╡ 9dd9d67b-7856-43e1-9859-76a5463428ce
-let
+article_figure = let
     plt_mass_branches =
         data(df_mass) *
         (
@@ -734,6 +760,9 @@ let
         )
     p_mass = draw(plt_mass_branches, palettes=(; color=colors))
 end
+
+# ╔═╡ 53372fb0-c6a0-440f-acdf-bad5b205db22
+save("../2-results/2-plots/biomass_evaluation.png", article_figure; px_per_unit=3)
 
 # ╔═╡ 4dcd6a1e-ebc9-43df-a4c0-6a7702d1491e
 let
@@ -755,7 +784,7 @@ let
 end
 
 # ╔═╡ 8239f0f5-041e-47d0-9623-570c4acf542e
-let
+stats_evaluation = let
     stats_mass =
         combine(
             groupby(df_mass, [:variable, :origin]),
@@ -766,6 +795,9 @@ let
         )
     sort(stats_mass, [:origin, :nRMSE])
 end
+
+# ╔═╡ 7874d655-5551-41ea-839f-cf02a89541d8
+CSV.write("../2-results/1-data/3-stats_branch_evaluation.csv", stats_evaluation)
 
 # ╔═╡ dafd1d8c-bb3e-4862-a4d9-c235193fe850
 let
@@ -778,6 +810,26 @@ let
             [:value, :fresh_mass_manual] => RME => :RME
         )
     sort(stats_mass, :nRMSE)
+end
+
+# ╔═╡ 641a6930-19e5-4775-bfd6-2483fd54737a
+let
+	df = leftjoin(DataFrames.transform(df_mass, :branch => (x -> lowercase.(x)) => :branch), df_density, on = :branch => :unique_branch)
+    plt_mass_branches =
+        data(filter(row -> row.origin == "Validation", df)) *
+        (
+            mapping(
+                :fresh_mass_manual => "Measured fresh mass (g)",
+                :fresh_mass_manual => "Predicted fresh mass (g)") * visual(Lines) +
+            mapping(
+                :fresh_mass_manual => "Measured fresh mass (g)",
+                :value => "Predicted fresh mass (g)",
+                color=:variable => (x -> rename_var(replace(x, "fresh_mass_" => ""))) => "Model",
+                marker=:measured_fresh_density => "Measured density",
+			) *
+            visual(Scatter, markersize=20, alpha=0.8)
+        )
+    p_mass = draw(plt_mass_branches, palettes=(; color=colors))
 end
 
 # ╔═╡ 666e9daf-e28f-4e14-b52a-bcc6b5aadb67
@@ -938,6 +990,7 @@ AlgebraOfGraphics = "cbdf2221-f076-402e-a563-3d30da359d67"
 CSV = "336ed68f-0bac-5ca0-87d4-7b16caf5d00b"
 CairoMakie = "13f3f980-e62b-5c42-98c6-ff1f3baf88f0"
 ColorSchemes = "35d6a980-a343-548e-a6ea-1d62b119f2f4"
+Colors = "5ae59095-9a9b-59fe-a467-6f913c188581"
 DataFrames = "a93c6f00-e57d-5684-b7b6-d8193f3e46c0"
 GLM = "38e38edf-8417-5370-95a0-9cbb8c7f171a"
 MLBase = "f0e99cf1-93fa-52ec-9ecc-5026115318e0"
@@ -951,6 +1004,7 @@ AlgebraOfGraphics = "~0.6.16"
 CSV = "~0.10.11"
 CairoMakie = "~0.10.6"
 ColorSchemes = "~3.21.0"
+Colors = "~0.12.10"
 DataFrames = "~1.5.0"
 GLM = "~1.8.3"
 MLBase = "~0.9.1"
@@ -964,7 +1018,7 @@ PLUTO_MANIFEST_TOML_CONTENTS = """
 
 julia_version = "1.9.0"
 manifest_format = "2.0"
-project_hash = "85db732e2cc75dd63858f6af2c07676725925230"
+project_hash = "16a66f9b94413c320cd2464d5df9bff0f26e0c2d"
 
 [[deps.AbstractFFTs]]
 deps = ["LinearAlgebra"]
@@ -2472,16 +2526,20 @@ version = "3.5.0+0"
 # ╟─bde004a8-d54c-4049-98f6-87c579785641
 # ╟─a7bf20e9-211c-4161-a5d2-124866afa76e
 # ╠═aaa829ee-ec36-4116-8424-4b40c581c2fc
+# ╠═4dd53a56-05dd-4244-862c-24ebaef45d52
 # ╟─f2eb6a9d-e788-46d0-9957-1bc22a98ad5d
 # ╟─b49c4235-a09e-4b8c-a392-d423d7ed7d4c
-# ╟─d587f110-86d5-41c0-abc7-2671d711fbdf
+# ╠═d587f110-86d5-41c0-abc7-2671d711fbdf
 # ╟─e2f20d4c-77d9-4b95-b30f-63febb7888c3
+# ╠═f9e07eb8-8457-48cc-a5f9-7ebb06bbfe81
 # ╟─dc2bd8f0-c321-407f-9592-7bcdf45f9634
 # ╟─3944b38d-f45a-4ff9-8348-98a8e04d4ad1
+# ╠═b14476ab-f70b-4c22-a321-b339f94ad219
 # ╟─9c04906b-10cd-4c53-a879-39d168e5bd1f
 # ╟─e5c0c40a-eb0a-4726-b58e-59c64cb39eae
 # ╟─d66aebf5-3681-420c-a342-166ea05dda2e
 # ╠═ecbcba9b-da36-4733-bc61-334c12045b0e
+# ╠═c27512cc-9c75-4dcf-9e5a-79c49e4ba478
 # ╟─f26a28b2-d70e-4543-b58e-2d640c2a0c0d
 # ╠═9290e9bf-4c43-47c7-96ec-8b44ad3c6b23
 # ╟─466aa3b3-4c78-4bb7-944d-5d55128f8cf6
@@ -2492,13 +2550,17 @@ version = "3.5.0+0"
 # ╟─0409c90e-fc40-4f02-8805-9feb6a7f8eb9
 # ╟─fa2acb23-a9f7-4324-99e4-923b0811591f
 # ╟─c9090d58-4fd6-4b4c-ad14-bf2f611cccfd
-# ╟─9dd9d67b-7856-43e1-9859-76a5463428ce
+# ╠═9dd9d67b-7856-43e1-9859-76a5463428ce
+# ╠═53372fb0-c6a0-440f-acdf-bad5b205db22
 # ╟─7fdbd52d-969f-47e5-9628-4de6077c8ff3
 # ╟─4dcd6a1e-ebc9-43df-a4c0-6a7702d1491e
 # ╟─42dc6f96-c947-476c-8073-cfe98733836c
 # ╟─8239f0f5-041e-47d0-9623-570c4acf542e
+# ╠═7874d655-5551-41ea-839f-cf02a89541d8
 # ╟─b62964a9-59e8-478f-b30a-2513b6291e67
 # ╟─dafd1d8c-bb3e-4862-a4d9-c235193fe850
+# ╟─ddb4f5a5-5e2b-43a1-8e3f-09c3dad8870f
+# ╟─641a6930-19e5-4775-bfd6-2483fd54737a
 # ╟─30f8608f-564e-4ffc-91b2-1f104fb46c1e
 # ╟─0a19ac96-a706-479d-91b5-4ea3e091c3e8
 # ╟─5dc0b0d9-dde6-478b-9bee-b9503a3a4d82

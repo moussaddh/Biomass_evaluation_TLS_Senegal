@@ -70,6 +70,12 @@ Pluto.run(notebook = "1-code/4.1-step_1_check_LiDAR_length.jl")
 Pluto.run(notebook = "1-code/4.2-step_2_check_manual_measurement.jl")
 ```
 
+- Step 3: Finding variables explaining the cross-section:
+
+```julia
+Pluto.run(notebook = "1-code/3-model_cross_section.jl")
+```
+
 ### Results
 
 The results are all stored in the `2-results` folder. They are divided into three sub-categories:

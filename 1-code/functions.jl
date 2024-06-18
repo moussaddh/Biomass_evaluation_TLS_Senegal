@@ -4,101 +4,91 @@ using MultiScaleTreeGraph
 using Statistics: mean
 using CSV
 using DataFrames
-import MLBase
 
 export compute_all_mtg_data
 export bind_csv_files
 export segmentize_mtgs
-export compute_volume, compute_var_axis
-export RMSE, EF, nRMSE
-export compute_volume_model, volume_stats
+export compute_volume
+export NRMSE, RMSE, EF, nRMSE
+export structural_model!
 
-###############################################
-# Functions used in 1-compute_field_mtg_data.jl
-###############################################
+function structural_model!(mtg_tree, fresh_density, dry_density, first_cross_section=nothing)
+    if (:radius in names(mtg_tree))
+        transform!(mtg_tree, :radius => (x -> x * 2) => :diameter, symbol="N") # diameter in m
+    end
 
-function compute_data_mtg(mtg)
-    transform!(
-        mtg,
-        (node -> sum(descendants!(node, :length, symbol="S", self=true, ignore_nothing=true))) => :pathlength_subtree,
-        symbol="S",
-        filter_fun=(node -> node[:length] !== nothing)
+    # Step 1: computes the length of each node:
+    transform!(mtg_tree, compute_length_coord => :length, symbol="N") # length is in meters
+
+    @mutate_mtg!(
+        mtg_tree,
+        pathlength_subtree = sum(filter(x -> x !== nothing, descendants!(node, :length, symbol="N", self=true))),
+        symbol = "N",
+        filter_fun = x -> x[:length] !== nothing
     )
 
-    # Number of segments each segment bears
-    transform!(
-        mtg,
-        (node -> length(descendants!(node, :length, symbol="S", self=true))) => :segment_subtree,
-        nleaves! => :number_leaves,
-        symbol="S",
+    # Identify which node is a segment root:
+    transform!(mtg_tree, is_seg => :is_segment, symbol="N")
+    transform!(mtg_tree, segment_index_on_axis => :segment_index_on_axis, symbol="N")
+
+    @mutate_mtg!(
+        mtg_tree,
+        segment_subtree = length(descendants!(node, :length, symbol="N", self=true, filter_fun=is_seg)),
+        number_leaves = nleaves!(node),
+        symbol = "N"
     )
 
-    branching_order!(mtg, ascend=false)
+    branching_order!(mtg_tree, ascend=false)
     # We use basipetal topological order (from tip to base) to allow comparisons between branches of
     # different ages (the last emitted segment will always be of order 1).
 
-    # Compute the index of each segment on the axis in a basipetal way (from tip to base)
-    transform!(
-        mtg,
-        (node -> length(descendants!(node, :length, symbol="S", link=("/", "<"), all=false))) => :n_segments,
-        symbol="A",
-    )
+    # Use the first cross-section for the first value to apply the pipe-model:
+    if first_cross_section === nothing
+        first_cross_section = π * ((descendants(mtg_tree, :diameter, ignore_nothing=true, recursivity_level=5)[1] / 2.0)^2)
+    end
 
-    # now use n_segments to compute the index of the segment on the axis (tip = 1, base = n_segments)
-    @mutate_mtg!(
-        mtg,
-        n_segments_axis = ancestors(node, :n_segments, symbol="A")[1],
-        segment_index_on_axis = length(descendants!(node, :length, symbol="S", link=("/", "<"), all=false)) + 1,
-        symbol = "S"
-    )
-
-    # Compute the total length of the axis in mm:
-    @mutate_mtg!(
-        mtg,
-        axis_length = compute_axis_length(node),
-        symbol = "A"
-    )
-
-    # Associate the axis length to each segment:
-    @mutate_mtg!(mtg, axis_length = get_axis_length(node), symbol = "S")
-
-    @mutate_mtg!(mtg, volume = compute_volume(node), symbol = "S") # volume of the segment in mm3
-
-    # @mutate_mtg!(mtg, volume = compute_var_axis(node), symbol = "A") # volume of the axis in mm3
-
-    @mutate_mtg!(mtg, cross_section = compute_cross_section(node), symbol = "S") # area of segment cross section in mm2
-    @mutate_mtg!(mtg, cross_section_children = compute_cross_section_children(node), symbol = "S") # area of segment cross section in mm2
-
-    # Cross section of the terminal nodes for each node
-    @mutate_mtg!(mtg, cross_section_leaves = compute_cross_section_leaves(node), symbol = "S")
-
-    # Volume of wood the section bears (all the sub-tree):
-    @mutate_mtg!(mtg, volume_subtree = compute_volume_subtree(node), symbol = "S")
-
-    # How many leaves the sibling of the node has:
-    @mutate_mtg!(mtg, nleaves_siblings = sum(nleaves_siblings!(node)))
-
-    # How many leaves the node has in proportion to its siblings + itself:
-    @mutate_mtg!(mtg, nleaf_proportion_siblings = node[:number_leaves] / (node[:nleaves_siblings] + node[:number_leaves]), symbol = "S")
-
-    first_cross_section = filter(x -> x !== nothing, descendants(mtg, :cross_section, recursivity_level=5))[1]
-    @mutate_mtg!(mtg, cross_section_pipe = pipe_model!(node, first_cross_section))
+    @mutate_mtg!(mtg_tree, cross_section_pipe = pipe_model!(node, first_cross_section))
 
     # Adding the cross_section to the root:
-    append!(mtg, (cross_section=first_cross_section,))
-    # Compute the cross-section for the axes nodes using the one measured on the S just below:
-    @mutate_mtg!(mtg, cross_section_all = compute_cross_section_all(node))
+    append!(
+        mtg_tree,
+        (
+            cross_section=first_cross_section,
+            cross_section_pipe=first_cross_section,
+            cross_section_sm=first_cross_section
+        )
+    )
 
-    mtg[:length] = sum(descendants(mtg, :length, symbol="S"))
+    # Compute the cross-section using the structural model:
+    @mutate_mtg!(mtg_tree, cross_section_sm = cross_section_stat_mod_all(node, symbol="N"), symbol = "N")
+
+    # Compute the diameters:
+    transform!(mtg_tree, :cross_section_pipe => (x -> sqrt(x / π) * 2.0) => :diameter_pipe, symbol="N")
+    transform!(mtg_tree, :cross_section_sm => (x -> sqrt(x / π) * 2.0 / 1000.0) => :diameter_sm, symbol="N")
+
+    # Compute the radius
+    transform!(mtg_tree, :diameter_pipe => (x -> x / 2) => :radius_pipe, symbol="N")
+    transform!(mtg_tree, :diameter_sm => (x -> x / 2) => :radius_sm, symbol="N")
+
+    # Recompute the volume:
+    compute_volume_stats(x, var) = x[var] * x[:length]
+
+    @mutate_mtg!(mtg_tree, volume_sm = compute_volume_stats(node, :cross_section_sm), symbol = "N") # volume in mm3
+    @mutate_mtg!(mtg_tree, volume_pipe_mod = compute_volume_stats(node, :cross_section_pipe), symbol = "N") # volume in mm3
+
+    # And the biomass:
+    @mutate_mtg!(mtg_tree, fresh_mass = node[:volume_sm] * fresh_density * 1e-3, symbol = "N") # in g
+    @mutate_mtg!(mtg_tree, dry_mass = node[:volume_sm] * dry_density * 1e-3, symbol = "N") # in g
+
+    @mutate_mtg!(mtg_tree, fresh_mass_pipe_mod = node[:volume_pipe_mod] * fresh_density * 1e-3, symbol = "N") # in g
+    @mutate_mtg!(mtg_tree, dry_mass_pipe_mod = node[:volume_pipe_mod] * dry_density * 1e-3, symbol = "N") # in g
 
     # Clean-up the cached variables:
-    clean_cache!(mtg)
-
-    return mtg
+    clean_cache!(mtg_tree)
 end
 
 function compute_cross_section_all(x, var=:cross_section)
-    if x.MTG.symbol == "A"
+    if symbol(x) == "A"
         desc_cross_section = descendants(x, var, symbol="S", recursivity_level=1)
         if length(desc_cross_section) > 0
             return desc_cross_section[1]
@@ -109,7 +99,6 @@ function compute_cross_section_all(x, var=:cross_section)
         x[var]
     end
 end
-
 
 function compute_volume_subtree(x)
     volume_descendants = filter(x -> x !== nothing, descendants!(x, :volume, symbol="S", self=true))
@@ -140,33 +129,19 @@ function compute_volume(x)
     end
 end
 
-"""
-    compute_var_axis(x, vol_col = :volume)
-
-Sum a variable over an axis alone, excluding the axis it bears itself.
-"""
-function compute_var_axis(x, vol_col=:volume)
-    sum(descendants!(x, vol_col, symbol="S", link=("/", "<"), all=false))
+function compute_diameter(x)
+    if x[:diameter] === nothing
+        diams = [x[:diameter_50_1], x[:diameter_50_2], x[:diameter_70_1], x[:diameter_70_2]]
+        filter!(x -> x !== nothing, diams)
+        if length(diams) > 0
+            return mean(diams)
+        else
+            return nothing
+        end
+    else
+        return x[:diameter]
+    end
 end
-
-"""
-    compute_A1_axis_from_start(x, vol_col = :volume; id_cor_start)
-
-Compute the sum of a variable over the axis starting from node that has `id_cor_start` value.
-"""
-function compute_A1_axis_from_start(x, vol_col=:volume; id_cor_start)
-    length_gf_A1 = descendants!(x, vol_col, symbol="S", link=("/", "<"), all=false)
-    id_cor_A1 = descendants!(x, :id_cor, symbol="S", link=("/", "<"), all=false)
-    sum(length_gf_A1[findfirst(x -> x == id_cor_start, id_cor_A1):end])
-end
-
-
-
-function compute_var_axis_A2(x, vol_col=:volume)
-    sum(descendants!(x, vol_col, symbol="S"))
-end
-
-
 
 function get_axis_length(x)
     axis_length = ancestors(x, :axis_length, symbol="A", recursivity_level=1)
@@ -177,21 +152,120 @@ function get_axis_length(x)
     end
 end
 
-
+function compute_length(x)
+    if x[:length] === nothing
+        x[:length_mm]
+    else
+        return x[:length] * 10.0
+    end
+end
 
 function compute_axis_length(x)
     length_descendants = filter(x -> x !== nothing, descendants!(x, :length, symbol="S", link=("/", "<"), all=false))
     length(length_descendants) > 0 ? sum(length_descendants) : nothing
 end
 
+function compute_dry_w(x)
+    if x[:dry_weight_p1] !== nothing
+        x[:dry_weight_p1]
+    elseif x[:dry_weight_p2] !== nothing
+        x[:dry_weight_p2]
+    end
+end
 
-
+function compute_density(x)
+    if x[:fresh_density] !== nothing
+        x[:fresh_density]
+    elseif x[:dry_weight] !== nothing
+        x[:dry_weight] / x[:volume_bh]
+    end
+end
 
 function compute_subtree_length!(x)
     length_descendants = filter(x -> x !== nothing, descendants!(x, :length, symbol="S", self=true))
     length(length_descendants) > 0 ? sum(length_descendants) : nothing
 end
 
+function compute_data_mtg!(mtg)
+    transform!(
+        mtg,
+        (node -> sum(descendants!(node, :length, symbol="S", self=true, ignore_nothing=true))) => :pathlength_subtree,
+        symbol="S",
+        filter_fun=(node -> node[:length] !== nothing)
+    )
+
+    # Number of segments each segment bears
+    transform!(
+        mtg,
+        (node -> length(descendants!(node, :length, symbol="S", self=true))) => :segment_subtree,
+        nleaves! => :number_leaves,
+        symbol="S",
+    )
+
+    branching_order!(mtg, ascend=false)
+    # We use basipetal topological order (from tip to base) to allow comparisons between branches of
+    # different ages (the last emitted segment will always be of order 1).
+
+    # Compute the index of each segment on the axis in a basipetal way (from tip to base)
+    transform!(
+        mtg,
+        (node) -> length(descendants!(node, :length, symbol="S", link=("/", "<"), all=false)) => :n_segments,
+        symbol="A"
+    )
+
+    # now use n_segments to compute the index of the segment on the axis (tip = 1, base = n_segments)
+    transform!(
+        mtg,
+        (node) -> ancestors(node, :n_segments, symbol="A")[1] => :n_segments_axis,
+        (node) -> length(descendants!(node, :length, symbol="S", link=("/", "<"), all=false)) + 1 => :segment_index_on_axis,
+        symbol="S"
+    )
+
+    # Compute the total length of the axis in mm:
+    transform!(
+        mtg,
+        compute_axis_length => :axis_length,
+        symbol="A"
+    )
+
+    # Associate the axis length to each segment:
+    transform!(mtg, get_axis_length => :axis_length, symbol="S")
+    transform!(mtg, compute_volume => :volume, symbol="S") # volume of the segment in mm3
+
+    transform!(mtg, compute_cross_section => :cross_section, symbol="S") # area of segment cross section in mm2
+    transform!(mtg, compute_cross_section_children => :cross_section_children, symbol="S") # area of segment cross section in mm2
+
+    # Cross section of the terminal nodes for each node
+    transform!(mtg, compute_cross_section_leaves => :cross_section_leaves, symbol="S")
+
+
+    # Volume of wood the section bears (all the sub-tree):
+    transform!(mtg, compute_volume_subtree => :volume_subtree, symbol="S")
+
+    # How many leaves the sibling of the node has:
+    transform!(mtg, (node -> sum(nleaves_siblings!(node))) => :nleaves_siblings)
+
+    # How many leaves the node has in proportion to its siblings + itself:
+    transform!(mtg, (node -> node[:number_leaves] / (node[:nleaves_siblings] + node[:number_leaves])) => :nleaf_proportion_siblings, symbol="S")
+
+    first_cross_section = filter(x -> x !== nothing, descendants(mtg, :cross_section, recursivity_level=5))[1]
+    transform!(mtg, (node -> pipe_model!(node, first_cross_section)) => :cross_section_pipe)
+
+    # Adding the cross_section to the root:
+    append!(mtg, (cross_section=first_cross_section,))
+    # Compute the cross-section for the axes nodes using the one measured on the S just below:
+    transform!(mtg, compute_cross_section_all => :cross_section_all)
+
+    # Use the pipe model, but only on nodes with a cross_section <= 314 (≈20mm diameter)
+    transform!(mtg, (node -> pipe_model!(node, :cross_section_all, 314, allow_missing=true)) => :cross_section_pipe_50)
+
+    mtg[:length] = sum(descendants(mtg, :length, symbol="S"))
+
+    # Clean-up the cached variables:
+    clean_cache!(mtg)
+
+    return mtg
+end
 
 function compute_all_mtg_data(mtg_file, new_mtg_file, csv_file)
     # Import the mtg file:
@@ -214,8 +288,9 @@ function compute_all_mtg_data(mtg_file, new_mtg_file, csv_file)
         transform!(mtg, :diameter_mm => :diameter, symbol="S") # diameter of the segment in mm
 
         # Compute extra data:
-        compute_data_mtg(mtg)
+        compute_data_mtg!(mtg)
     end
+
     # write the resulting mtg to disk:
     write_mtg(new_mtg_file, mtg)
 
@@ -224,49 +299,18 @@ function compute_all_mtg_data(mtg_file, new_mtg_file, csv_file)
         DataFrame(
             mtg,
             [
-                :density, :density_fresh, :length, :diameter, :axis_length, :branching_order,
-                :segment_index_on_axis, :fresh_mass, :volume, :volume_subtree, :cross_section,
+                :density, :length, :diameter, :axis_length, :branching_order,
+                :segment_index_on_axis, :mass_g, :volume, :volume_subtree, :cross_section,
                 :cross_section_children, :cross_section_leaves, :n_segments_axis,
                 :number_leaves, :pathlength_subtree, :segment_subtree,
                 :cross_section_pipe, :cross_section_pipe_50, :nleaf_proportion_siblings,
                 :nleaves_siblings, :cross_section_all, :comment, :id_cor
             ])
 
-    # Remove columns that contain only missing values:
-    select!(df, Not(names(df, Missing)))
-
     CSV.write(csv_file, df[:, Not(:tree)])
 end
 
 
-function compute_all_mtg_data_ps3d(mtg_file, new_mtg_file, csv_file)
-    # Import the mtg file:
-    mtg = read_mtg(mtg_file)
-
-    transform!(mtg, :radius => (x -> x === NaN ? 0.0 : x * 2.0 * 1000.0) => :diameter, symbol="S") # diameter of the segment in mm
-
-    # Compute extra data:
-    compute_data_mtg(mtg)
-    sum(descendants(mtg, :radius, symbol="S"))
-
-    # write the resulting mtg to disk:
-    write_mtg(new_mtg_file, mtg)
-
-    # And the resulting DataFrame to a csv file:
-    df =
-        DataFrame(
-            mtg,
-            [
-                :length, :diameter, :axis_length, :branching_order,
-                :segment_index_on_axis, :volume, :volume_subtree, :cross_section,
-                :cross_section_children, :cross_section_leaves, :n_segments_axis,
-                :number_leaves, :pathlength_subtree, :segment_subtree,
-                :cross_section_pipe, :nleaf_proportion_siblings,
-                :nleaves_siblings, :cross_section_all
-            ])
-
-    CSV.write(csv_file, df[:, Not(:tree)])
-end
 
 
 ###############################################
@@ -320,12 +364,6 @@ function segmentize_mtgs(in_folder, out_folder)
             joinpath(in_folder, i),
             joinpath(out_folder, i),
         )
-
-        compute_all_mtg_data_ps3d(
-            joinpath(out_folder, i),
-            joinpath(out_folder, i),
-            joinpath(out_folder, splitext(basename(i))[1] * ".csv")
-        )
     end
 end
 
@@ -337,53 +375,29 @@ nodes describing the portion of the branch between two branching points. Axis is
 upper-scale grouping following segments, *i.e.* segments with a "/" or "<" link.
 """
 function segmentize_mtg(in_file, out_file)
+    # in_folder = joinpath("0-data", "3-mtg_lidar_plantscan3d", "1-raw_output")
+    # out_folder = joinpath("0-data", "3-mtg_lidar_plantscan3d", "3-raw_output_segmentized")
+    # out_file = joinpath(out_folder, mtg_files[1])
+    # in_file = joinpath(in_folder, mtg_files[1])
     mtg = read_mtg(in_file)
+
     # Compute internode length and then cumulate the lenghts when deleting.
 
     # Step 1: computes the length of each node:
-    @mutate_mtg!(mtg, length_node = compute_length_coord(node), scale = 2) # length is in meters
+    transform!(mtg, compute_length_coord => :length_node, scale=2) # length is in meters
 
-    # Step 3: cumulate the length of all nodes in a segment for each segment node:
-    @mutate_mtg!(mtg, length = cumul_length_segment(node), scale = 2, filter_fun = is_seg)
+    # Step 2: cumulate the length of all nodes in a segment for each segment node:
+    transform!(mtg, cumul_length_segment => :length, scale=2, filter_fun=is_seg)
     # And add a lenght of 0 for the first segment:
     mtg[1][:length] = 0.0
 
-    # Trying to remove the NaNs in the radius column by taking the first non-NaN value in the children that follow (on the same axis):
-    traverse!(mtg, scale=2) do node
-        if !isleaf(node) && !isroot(node) && length(node.children) == 1
-            # We keep the root and the leaves, but want to delete the nodes with no branching.
-            # We recognise them because they have only one child. Also we want to keep the very
-            # first node even if it has only one child.
-
-
-            if node[:radius] === NaN
-                # First, we try to take the radius of the first child that has a non-NaN radius:
-                child_follow_radius = descendants(node, :radius, link="<", filter_fun=node -> node[:radius] !== NaN)
-                new_radius = findfirst(x -> x !== NaN, child_follow_radius)
-
-                if new_radius === nothing
-                    # If all children have NaN radius, we take try with the parent, but it has to be a segment node:
-                    parent_follow_radius = ancestors(node, :radius, link="<", filter_fun=node -> node[:radius] !== NaN && length(node.children) == 1, all=false)
-                    new_radius = findfirst(x -> x !== NaN, parent_follow_radius)
-
-                    # If we can't find a non-NaN radius, we just skip this node and keep the NaN radius:
-                    if new_radius === nothing
-                        return
-                    end
-                end
-
-                node[:radius] = new_radius
-            end
-        end
-    end
-
-    # Step 4: delete nodes to make the mtg as the field measurements: with nodes only at in_filtering points
+    # Step 3: delete nodes to make the mtg as the field measurements: with nodes only at in_filtering points
     mtg = delete_nodes!(mtg, filter_fun=is_segment!, scale=(1, 2))
 
     # Insert a new scale: the Axis.
     # First step we put all nodes at scale 3 instead of 2:
-    @mutate_mtg!(mtg, node.MTG.scale = 3, scale = 2)
-
+    transform!(mtg, (node -> scale!(node, 3)), scale=2)
+    mtg[:scales] = scales(mtg)
     # 2nd step, we add axis nodes (scale 2) branching each time there's a branching node:
     template = MutableNodeMTG("+", "A", 0, 2)
     insert_parents!(mtg, template, scale=3, link="+")
@@ -391,10 +405,10 @@ function segmentize_mtg(in_file, out_file)
     insert_parents!(mtg, NodeMTG("/", "A", 1, 2), scale=3, link="/", all=false)
 
     # 3d step, we change the branching nodes links to decomposition:
-    @mutate_mtg!(mtg, node.MTG.link = "/", scale = 3, link = "+")
+    transform!(mtg, (node -> link!(node, "/")), scale=3, link="+")
 
     # Fourth step, we rename the nodes symbol into segments "S":
-    @mutate_mtg!(mtg, node.MTG.symbol = "S", symbol = "N")
+    transform!(mtg, (node -> symbol!(node, "S")), symbol="N")
 
     # And the plant symbol as the plant name:
     symbol_from_file = splitext(replace(basename(out_file), "_" => ""))[1]
@@ -404,19 +418,31 @@ function segmentize_mtg(in_file, out_file)
         symbol_from_file *= "whole"
     end
 
-    mtg.MTG.symbol = symbol_from_file
+    symbol!(mtg, symbol_from_file)
+
+    # Updating the symbols in the root node:
+    mtg[:symbols] = symbols(mtg)
 
     # Last step, we add the index as in the field, *i.e.* the axis nodes are indexed following
     # their topological order, and the segments are indexed following their position on the axis:
-    @mutate_mtg!(mtg, node.MTG.index = A_indexing(node))
+    transform!(mtg, (x -> 1) => :index, symbol="A")
+    transform!(mtg, (node -> A_indexing(node)) => :index, symbol="A")
+    transform!(mtg, (node -> index!(node, node[:index])), symbol="A")
+
+    # NB: this is done in 3 steps because the index is not a node attribute at first (it
+    # is in the MTG field). So we first initialize the index to 1, then we update it with the
+    # indexing function (A_indexing), then we update the index from the MTG field with the
+    # index attribute.
+
+    # Remove the index from the nodes attributes (only temporary):
+    traverse!(mtg, node -> pop!(node, :index))
 
     # Set back the root node with no indexing:
-    mtg.MTG.index = nothing
-
-    @mutate_mtg!(mtg, node.MTG.index = S_indexing(node), scale = 3)
+    index!(mtg, -9999)
+    transform!(mtg, (node -> index!(node, S_indexing(node))), scale=3)
 
     # Delete the old length of the nodes (length_node) from the attributes:
-    traverse!(mtg, x -> x[:length_node] === nothing ? nothing : pop!(x.attributes, :length_node))
+    transform!(mtg, (x -> x[:length_node] === nothing ? nothing : pop!(getfield(x, :attributes), :length_node)))
 
     # Write MTG back to file:
     write_mtg(out_file, mtg)
@@ -428,12 +454,13 @@ end
 
 Compute node length as the distance between itself and its parent.
 """
-function compute_length_coord(node)
-    if !isroot(node.parent)
+function compute_length_coord(node; x=:XX, y=:YY, z=:ZZ)
+    parent_node = parent(node)
+    if !isroot(parent_node)
         sqrt(
-            (node.parent[:XX] - node[:XX])^2 +
-            (node.parent[:YY] - node[:YY])^2 +
-            (node.parent[:ZZ] - node[:ZZ])^2
+            (parent_node[x] - node[x])^2 +
+            (parent_node[y] - node[y])^2 +
+            (parent_node[z] - node[z])^2
         )
     else
         0.0
@@ -443,10 +470,21 @@ end
 """
     is_seg(x)
 
-Is a node also a segment node ? A segment node is a node at a branching position, or at the
-first (or last) position in the tree.
+Tests if a node is a segment node. A segment node is a node:
+    - at a branching position, *i.e.*, a parent of more than one children node
+    - a leaf.
 """
-is_seg(x) = isleaf(x) || (!isroot(x) && (length(x.children) > 1 || x[1].MTG.link == "+"))
+is_seg(x) = isleaf(x) || (!isroot(x) && (length(children(x)) > 1 || link(x[1]) == "+"))
+
+"""
+    segment_index_on_axis(node, symbol="N")
+
+Compute the index of a segment node on the axis. The computation is basipetal, starting from tip to base. 
+The index is the position of the segment on the axis.
+"""
+function segment_index_on_axis(node, symbol="N")
+    isleaf(node) ? 1 : sum(descendants!(node, :is_segment, symbol=symbol, link=("/", "<"), all=false, type=Bool)) + 1
+end
 
 """
     cumul_length_segment(node)
@@ -454,22 +492,21 @@ is_seg(x) = isleaf(x) || (!isroot(x) && (length(x.children) > 1 || x[1].MTG.link
 Cumulates the lengths of segments inside a segment. Only does it if the node is considered
 as a segment, else returns 0.
 """
-function cumul_length_segment(node)
+function cumul_length_segment(node, length_name=:length_node)
     if is_seg(node)
 
         length_ancestors =
             [
-                node[:length_node],
+                node[length_name],
                 ancestors(
                     node,
-                    :length_node,
+                    length_name,
                     filter_fun=x -> !is_seg(x),
                     scale=2,
                     all=false)...
             ]
         # NB: we don't use self = true because it would trigger a stop due to all = false
         filter!(x -> x !== nothing, length_ancestors)
-
 
         sum(length_ancestors) * 1000.0
     else
@@ -478,10 +515,19 @@ function cumul_length_segment(node)
 end
 
 function A_indexing(node)
-    if isroot(node)
+    parent_index = ancestors(
+        node, :index,
+        symbol="A",
+        recursivity_level=1,
+        type=Union{Int64,Nothing}
+    )
+
+    if length(parent_index) == 0
         return 1
+    elseif link(node) == "+"
+        return parent_index[1] + 1
     else
-        node.MTG.link == "+" ? node.parent.MTG.index + 1 : node.parent.MTG.index
+        return parent_index[1]
     end
 end
 
@@ -490,182 +536,55 @@ function S_indexing(node)
     if isroot(node)
         return 0
     else
-        node.MTG.link == "/" ? 1 : node.parent.MTG.index + 1
+        link(node) == "/" ? 1 : index(parent(node)) + 1
     end
 end
 
-"""
-    RMSE(obs,sim)
-
-Returns the Root Mean Squared Error between observations `obs` and simulations `sim`.
-The closer to 0 the better.
-"""
-function RMSE(obs, sim, digits=2)
-    return round(sqrt(sum((obs .- sim) .^ 2) / length(obs)), digits=digits)
-end
-
-"""
-    nRMSE(obs,sim)
-
-Returns the normalized Root Mean Squared Error between observations `obs` and simulations `sim`.
-The closer to 0 the better.
-"""
-function nRMSE(obs, sim; digits=2)
-    return round(sqrt(sum((obs .- sim) .^ 2) / length(obs)) / (findmax(obs)[1] - findmin(obs)[1]), digits=digits)
-end
-
-"""
-    EF(obs,sim)
-
-Returns the Efficiency Factor between observations `obs` and simulations `sim` using NSE (Nash-Sutcliffe efficiency) model.
-More information can be found at https://en.wikipedia.org/wiki/Nash%E2%80%93Sutcliffe_model_efficiency_coefficient.
-The closer to 1 the better.
-"""
-function EF(obs, sim, digits=2)
-    SSres = sum((obs - sim) .^ 2)
-    SStot = sum((obs .- mean(obs)) .^ 2)
-    return round(1 - SSres / SStot, digits=digits)
-end
-
-
-function compute_data_mtg_lidar!(mtg, fresh_density, dry_density, model)
-
-    # All variables related to radius come from ps3d:
-    transform!(
-        mtg,
-        :diameter => :diameter_ps3d,
-        :cross_section => :cross_section_ps3d,
-        :volume => :volume_ps3d,
-        symbol="S"
+function cross_section_stat_mod_all(node; symbol="N")
+    max(
+        0.0,
+        0.520508 * node[:cross_section_pipe] + 0.0153365 * node[:pathlength_subtree] +
+        6.38394 * node[:branching_order] + 10.9389 * node[:segment_index_on_axis] - 10.137 * node[:number_leaves] +
+        4.46843 * node[:segment_subtree]
     )
-
-    transform!(mtg,
-        [:cross_section_pipe, :length] => ((x, y) -> x * y) => :volume_pipe,
-        symbol="S"
-    )
-
-    transform!(mtg, (x -> cross_section_stat_mod(x, model)) => :cross_section_stat_mod, symbol="S")
-
-    transform!(mtg,
-        [:cross_section_stat_mod, :length] => ((x, y) -> x * y) => :volume_stat_mod,
-        symbol="S"
-    )
-
-    mtg[:volume_ps3d] = sum(descendants(mtg, :volume_ps3d, symbol="S"))
-    mtg[:volume_stat_mod] = sum(descendants(mtg, :volume_stat_mod, symbol="S"))
-    mtg[:volume_pipe] = sum(descendants(mtg, :volume_pipe, symbol="S"))
-
-    mtg[:fresh_mass_ps3d] = mtg[:volume_ps3d] * fresh_density * 1e-3 # in g
-    mtg[:fresh_mass_stat_mod] = mtg[:volume_stat_mod] * fresh_density * 1e-3 # in g
-    mtg[:fresh_mass_pipe] = mtg[:volume_pipe] * fresh_density * 1e-3 # in g
-
-    mtg[:dry_mass_ps3d] = mtg[:volume_ps3d] * dry_density * 1e-3 # in g
-    mtg[:dry_mass_stat_mod] = mtg[:volume_stat_mod] * dry_density * 1e-3 # in g
-    mtg[:dry_mass_pipe] = mtg[:volume_pipe] * dry_density * 1e-3 # in g
-
-    # Clean-up the cached variables:
-    clean_cache!(mtg)
-
-    return nothing
+end
 end
 
-function cross_section_stat_mod(node, model)
 
-    # Get the node attributes as a DataFrame for the model:
-    attr_names = MLBase.coefnames(model)
-    attr_values = []
-
-    for i in attr_names
-        if i == "(Intercept)"
-            continue
-        end
-        node_val = node[i]
-        if node_val === nothing
-            # No missing values allowed for predicting
-            return missing
-        end
-
-        push!(attr_values, i => node_val)
+function cylinder_from_radius(node::MultiScaleTreeGraph.Node, xyz_attr=[:XX, :YY, :ZZ]; radius=:radius, symbol="S")
+    node_start = ancestors(node, xyz_attr, recursivity_level=2, symbol=symbol)
+    if length(node_start) != 0
+        Cylinder(
+            Point3((node_start[1][1], node_start[1][2], node_start[1][3] .+ 0.01)),
+            Point3((node[xyz_attr[1]], node[xyz_attr[2]], node[xyz_attr[3]] .+ 0.01)),
+            node[radius] # radius in meter
+        )
     end
-
-    MLBase.predict(model, DataFrame(attr_values...))[1]
 end
 
-function compute_volume_model(branch, dir_path_lidar, dir_path_manual, df_density, model)
-    # Compute the average density:
-    dry_density = filter(x -> x.unique_branch == replace(branch, r"_cor$" => ""), df_density).dry_density[1]
-    fresh_density = filter(x -> x.unique_branch == replace(branch, r"_cor$" => ""), df_density).fresh_density[1]
 
-    # Importing the mtg from the manual measurement data:
-    mtg_manual = read_mtg(joinpath(dir_path_manual, replace(branch, r"_cor$" => "") * ".mtg"))
-    # Re-estimate the volume of the branch from the volume of its segments:
-    mtg_manual[:volume] = sum(descendants!(mtg_manual, :volume, symbol="S"))
+function circle_from_radius(node::MultiScaleTreeGraph.Node, xyz_attr=[:XX, :YY, :ZZ]; radius=:radius, symbol="S", radius_factor=1.0)
+    node_start = ancestors(node, xyz_attr, recursivity_level=2, symbol=symbol)
+    if length(node_start) != 0
+        template_cyl = cylinder_from_radius(node, xyz_attr, radius=radius, symbol=symbol)
+        top = extremity(template_cyl)
+        new_end_point = top + direction(template_cyl) * radius_factor # Scale the direction vector to the desired length
 
-    mtg_lidar_model = read_mtg(joinpath(dir_path_lidar, branch * ".mtg"))
-
-    compute_data_mtg_lidar!(mtg_lidar_model, fresh_density, dry_density, model)
-
-    return (mtg_manual, mtg_lidar_model)
+        # Create a new cylinder with the same end point, but adding a new end point that gives the width of the circle:
+        new_cyl = Cylinder(top, new_end_point, Makie.radius(template_cyl))
+    end
 end
 
-filter_A1_A2(x) = x.MTG.symbol == "A" && (x.MTG.index == 1 || x.MTG.index == 2)
-filter_A1_A2_S(x) = x.MTG.symbol == "S" || filter_A1_A2(x)
-
-
-function volume_stats(mtg_manual, mtg_lidar_ps3d_raw, mtg_lidar_model, df_density)
-    df_lidar_raw = DataFrame(mtg_lidar_ps3d_raw, [:volume_ps3d, :volume_stat_mod, :volume_pipe_mod, :volume_pipe_mod_50, :length, :cross_section_stat_mod])
-    df_lidar_model = DataFrame(mtg_lidar_model, [:volume_ps3d, :volume_stat_mod, :volume_pipe_mod, :volume_pipe_mod_50, :length, :cross_section_stat_mod])
-    df_manual = DataFrame(mtg_manual, [:volume_gf, :length_gap_filled, :cross_section_gap_filled])
-
-    # Getting the densities:
-    dry_density = filter(x -> x.branches == mtg_lidar_model.MTG.symbol, df_density).dry_density[1]
-    fresh_density = filter(x -> x.branches == mtg_lidar_model.MTG.symbol, df_density).fresh_density[1]
-
-    tot_lenght_lidar = sum(filter(x -> x.symbol == "S", df_lidar_model).length) / 1000 # length in m
-    tot_lenght_lidar_raw = sum(filter(x -> x.symbol == "S", df_lidar_raw).length) / 1000 # length in m
-    tot_lenght_manual = sum(filter(x -> x.symbol == "S", df_manual).length_gap_filled) / 1000
-
-    tot_vol_lidar = filter(x -> x.scale == 1, df_lidar_model).volume_ps3d[1] * 1e-9 # Total volume in m3
-    tot_vol_lidar_raw = filter(x -> x.scale == 1, df_lidar_raw).volume_ps3d[1] * 1e-9 # Total volume in m3
-    tot_vol_lidar_stat_mod = filter(x -> x.scale == 1, df_lidar_model).volume_stat_mod[1] * 1e-9 # Total volume in m3
-    tot_vol_lidar_pipe_mod = filter(x -> x.scale == 1, df_lidar_model).volume_pipe_mod[1] * 1e-9 # Total volume in m3
-    tot_vol_lidar_stat_mod_raw = filter(x -> x.scale == 1, df_lidar_raw).volume_stat_mod[1] * 1e-9 # Total volume in m3
-    tot_vol_lidar_pipe_mod_raw = filter(x -> x.scale == 1, df_lidar_raw).volume_pipe_mod[1] * 1e-9 # Total volume in m3
-    tot_vol_manual = filter(x -> x.scale == 1, df_manual).volume_gf[1] * 1e-9 # Total volume in m3
-
-    # Biomass:
-
-    # The fresh density is either taken as the average measured density at the lab or the one
-    # computed from the dimension measurements and the whole branch biomass:
-    actual_fresh_density = mtg_manual.attributes[:mass_g] / (tot_vol_manual * 1e6)
-
-    dry_biomass_lidar = tot_vol_lidar * dry_density * 1000 # mass in kg
-    fresh_biomass_lidar = tot_vol_lidar * fresh_density * 1000 # fresh biomass in kg
-    fresh_biomass_actual_lidar = tot_vol_lidar * actual_fresh_density * 1000 # fresh biomass in kg
-
-    dry_biomass_lidar_raw = tot_vol_lidar_raw * dry_density * 1000 # mass in kg
-    fresh_biomass_lidar_raw = tot_vol_lidar_raw * fresh_density * 1000 # fresh biomass in kg
-    fresh_biomass_actual_lidar_raw = tot_vol_lidar_raw * actual_fresh_density * 1000 # fresh biomass in kg
-
-    dry_biomass_lidar_stat_mod = tot_vol_lidar_stat_mod * dry_density * 1000 # mass in kg
-    fresh_biomass_lidar_stat_mod = tot_vol_lidar_stat_mod * fresh_density * 1000 # fresh biomass in kg
-    # Using the density re-computed using the volume manual measurement:
-    fresh_biomass_actual_stat_mod = tot_vol_lidar_stat_mod * actual_fresh_density * 1000 # fresh biomass in kg
-    fresh_biomass_lidar_stat_mod_raw = tot_vol_lidar_stat_mod_raw * fresh_density * 1000 # fresh biomass in kg
-
-    fresh_biomass_lidar_pipe_mod = tot_vol_lidar_pipe_mod * fresh_density * 1000 # fresh biomass in kg
-    fresh_biomass_lidar_pipe_mod_raw = tot_vol_lidar_pipe_mod_raw * fresh_density * 1000 # fresh biomass in kg
-
-    dry_biomass_manual = tot_vol_manual * dry_density * 1000 # mass in kg
-    fresh_biomass_manual = tot_vol_manual * fresh_density * 1000 # fresh biomass in kg
-
-    true_fresh_biomass = mtg_manual.attributes[:mass_g] / 1000
-
-    DataFrame(
-        variable=["length", "length", "volume", "volume", "volume", "volume", "volume", "volume", "biomass", "biomass", "biomass", "biomass", "biomass", "biomass"],
-        model=["plantscan3d cor.", "plantscan3d raw", "plantscan3d cor.", "plantscan3d raw", "stat. model cor.", "Pipe model cor.", "stat. model raw", "Pipe model raw", "plantscan3d cor.", "plantscan3d raw", "stat. model cor.", "Pipe model cor.", "stat. model raw", "Pipe model raw"],
-        measurement=[tot_lenght_manual, tot_lenght_manual, tot_vol_manual, tot_vol_manual, tot_vol_manual, tot_vol_manual, tot_vol_manual, tot_vol_manual, true_fresh_biomass, true_fresh_biomass, true_fresh_biomass, true_fresh_biomass, true_fresh_biomass, true_fresh_biomass],
-        prediction=[tot_lenght_lidar, tot_lenght_lidar_raw, tot_vol_lidar, tot_vol_lidar_raw, tot_vol_lidar_stat_mod, tot_vol_lidar_pipe_mod, tot_vol_lidar_stat_mod_raw, tot_vol_lidar_pipe_mod_raw, fresh_biomass_lidar, fresh_biomass_lidar_raw, fresh_biomass_lidar_stat_mod, fresh_biomass_lidar_pipe_mod, fresh_biomass_lidar_stat_mod_raw, fresh_biomass_lidar_pipe_mod_raw]
-    )
-end
+function draw_skeleton!(axis, node::MultiScaleTreeGraph.Node, xyz_attr=[:XX, :YY, :ZZ]; symbol="S", color=:slategrey, linewidth)
+    node_start = ancestors(node, xyz_attr, recursivity_level=2, symbol=symbol)
+    if length(node_start) != 0
+        lines!(
+            axis,
+            [node_start[1][1], node[:XX]],
+            [node_start[1][2], node[:YY]],
+            [node_start[1][3], node[:ZZ]] .+ 0.01,
+            color=color,
+            linewidth=linewidth
+        )
+    end
 end
