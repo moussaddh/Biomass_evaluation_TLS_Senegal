@@ -12,46 +12,51 @@ export compute_volume
 export NRMSE, RMSE, EF, nRMSE
 export structural_model!
 
-function structural_model!(mtg_tree, fresh_density, dry_density, first_cross_section=nothing)
-    if (:radius in names(mtg_tree))
-        transform!(mtg_tree, :radius => (x -> x * 2) => :diameter, symbol="N") # diameter in m
+function structural_model!(mtg, fresh_density, dry_density, first_cross_section=nothing; model=structural_model_faidherbia)
+    if (:radius in names(mtg))
+        transform!(
+            mtg,
+            :radius => (x -> x * 2 * 1000) => :diameter_ps3d,
+            :radius => (x -> π * (x * 1000)^2) => :cross_section_ps3d,
+            symbol="N"
+        ) # diameter in mm
     end
 
     # Step 1: computes the length of each node:
-    transform!(mtg_tree, compute_length_coord => :length, symbol="N") # length is in meters
+    transform!(mtg, compute_length_coord => :length, symbol="N") # length is in meters
 
-    @mutate_mtg!(
-        mtg_tree,
-        pathlength_subtree = sum(filter(x -> x !== nothing, descendants!(node, :length, symbol="N", self=true))),
-        symbol = "N",
-        filter_fun = x -> x[:length] !== nothing
+    transform!(
+        mtg,
+        (node -> sum(filter(x -> x !== nothing, descendants!(node, :length, symbol="N", self=true)))) => :pathlength_subtree,
+        symbol="N",
+        filter_fun=x -> x[:length] !== nothing
     )
 
     # Identify which node is a segment root:
-    transform!(mtg_tree, is_seg => :is_segment, symbol="N")
-    transform!(mtg_tree, segment_index_on_axis => :segment_index_on_axis, symbol="N")
+    transform!(mtg, is_seg => :is_segment, symbol="N")
+    transform!(mtg, segment_index_on_axis => :segment_index_on_axis, symbol="N")
 
-    @mutate_mtg!(
-        mtg_tree,
-        segment_subtree = length(descendants!(node, :length, symbol="N", self=true, filter_fun=is_seg)),
-        number_leaves = nleaves!(node),
-        symbol = "N"
+    transform!(
+        mtg,
+        (node -> length(descendants!(node, :length, symbol="N", self=true, filter_fun=is_seg))) => :segment_subtree,
+        nleaves! => :number_leaves,
+        symbol="N"
     )
 
-    branching_order!(mtg_tree, ascend=false)
+    branching_order!(mtg, ascend=false)
     # We use basipetal topological order (from tip to base) to allow comparisons between branches of
     # different ages (the last emitted segment will always be of order 1).
 
     # Use the first cross-section for the first value to apply the pipe-model:
     if first_cross_section === nothing
-        first_cross_section = π * ((descendants(mtg_tree, :diameter, ignore_nothing=true, recursivity_level=5)[1] / 2.0)^2)
+        first_cross_section = π * ((descendants(mtg, :diameter_ps3d, ignore_nothing=true, recursivity_level=5)[1] / 2.0)^2)
     end
 
-    @mutate_mtg!(mtg_tree, cross_section_pipe = pipe_model!(node, first_cross_section))
+    transform!(mtg, (node -> pipe_model!(node, first_cross_section)) => :cross_section_pipe)
 
     # Adding the cross_section to the root:
     append!(
-        mtg_tree,
+        mtg,
         (
             cross_section=first_cross_section,
             cross_section_pipe=first_cross_section,
@@ -60,31 +65,50 @@ function structural_model!(mtg_tree, fresh_density, dry_density, first_cross_sec
     )
 
     # Compute the cross-section using the structural model:
-    @mutate_mtg!(mtg_tree, cross_section_sm = cross_section_stat_mod_all(node, symbol="N"), symbol = "N")
+    transform!(mtg, model => :cross_section_sm, symbol="N")
 
     # Compute the diameters:
-    transform!(mtg_tree, :cross_section_pipe => (x -> sqrt(x / π) * 2.0) => :diameter_pipe, symbol="N")
-    transform!(mtg_tree, :cross_section_sm => (x -> sqrt(x / π) * 2.0 / 1000.0) => :diameter_sm, symbol="N")
+    transform!(mtg, :cross_section_pipe => (x -> sqrt(x / π) * 2.0) => :diameter_pipe, symbol="N")
+    transform!(mtg, :cross_section_sm => (x -> sqrt(x / π) * 2.0) => :diameter_sm, symbol="N")
 
     # Compute the radius
-    transform!(mtg_tree, :diameter_pipe => (x -> x / 2) => :radius_pipe, symbol="N")
-    transform!(mtg_tree, :diameter_sm => (x -> x / 2) => :radius_sm, symbol="N")
+    transform!(mtg, :diameter_pipe => (x -> x / 2) => :radius_pipe, symbol="N")
+    transform!(mtg, :diameter_sm => (x -> x / 2) => :radius_sm, symbol="N")
 
     # Recompute the volume:
     compute_volume_stats(x, var) = x[var] * x[:length]
 
-    @mutate_mtg!(mtg_tree, volume_sm = compute_volume_stats(node, :cross_section_sm), symbol = "N") # volume in mm3
-    @mutate_mtg!(mtg_tree, volume_pipe_mod = compute_volume_stats(node, :cross_section_pipe), symbol = "N") # volume in mm3
+    transform!(mtg, (node -> compute_volume_stats(node, :cross_section_sm)) => :volume_sm, symbol="N") # volume in mm3
+    transform!(mtg, (node -> compute_volume_stats(node, :cross_section_pipe)) => :volume_pipe_mod, symbol="N") # volume in mm3
+    transform!(mtg, (node -> compute_volume_stats(node, :cross_section_ps3d)) => :volume_ps3d, symbol="N") # volume in mm3
 
     # And the biomass:
-    @mutate_mtg!(mtg_tree, fresh_mass = node[:volume_sm] * fresh_density * 1e-3, symbol = "N") # in g
-    @mutate_mtg!(mtg_tree, dry_mass = node[:volume_sm] * dry_density * 1e-3, symbol = "N") # in g
+    transform!(mtg, (node -> node[:volume_sm] * fresh_density * 1e-3) => :fresh_mass, symbol="N") # in g
+    mtg.fresh_mass = sum(descendants(mtg, :fresh_mass, symbol="N"))
+    transform!(mtg, (node -> node[:volume_sm] * dry_density * 1e-3) => :dry_mass, symbol="N") # in g
+    mtg.dry_mass = sum(descendants(mtg, :dry_mass, symbol="N"))
 
-    @mutate_mtg!(mtg_tree, fresh_mass_pipe_mod = node[:volume_pipe_mod] * fresh_density * 1e-3, symbol = "N") # in g
-    @mutate_mtg!(mtg_tree, dry_mass_pipe_mod = node[:volume_pipe_mod] * dry_density * 1e-3, symbol = "N") # in g
+    transform!(mtg, (node -> node[:volume_pipe_mod] * fresh_density * 1e-3) => :fresh_mass_pipe_mod, symbol="N") # in g
+    mtg.fresh_mass_pipe_mod = sum(descendants(mtg, :fresh_mass_pipe_mod, symbol="N"))
+    transform!(mtg, (node -> node[:volume_pipe_mod] * dry_density * 1e-3) => :dry_mass_pipe_mod, symbol="N") # in g
+    mtg.dry_mass_pipe_mod = sum(descendants(mtg, :dry_mass_pipe_mod, symbol="N"))
+
+    transform!(mtg, (node -> node[:volume_ps3d] * fresh_density * 1e-3) => :fresh_mass_ps3d, symbol="N") # in g
+    mtg.fresh_mass_ps3d = sum(descendants(mtg, :fresh_mass_ps3d, symbol="N"))
+    transform!(mtg, (node -> node[:volume_ps3d] * dry_density * 1e-3) => :dry_mass_ps3d, symbol="N") # in g
+    mtg.dry_mass_ps3d = sum(descendants(mtg, :dry_mass_ps3d, symbol="N"))
 
     # Clean-up the cached variables:
-    clean_cache!(mtg_tree)
+    clean_cache!(mtg)
+end
+
+function structural_model_faidherbia(node)
+    max(
+        0.0,
+        0.817204 * node[:cross_section_pipe] +
+        13.4731 * node[:number_leaves] -
+        6.71983 * node[:segment_subtree]
+    )
 end
 
 function compute_cross_section_all(x, var=:cross_section)
@@ -209,15 +233,15 @@ function compute_data_mtg!(mtg)
     # Compute the index of each segment on the axis in a basipetal way (from tip to base)
     transform!(
         mtg,
-        (node) -> length(descendants!(node, :length, symbol="S", link=("/", "<"), all=false)) => :n_segments,
+        (node -> length(descendants!(node, :length, symbol="S", link=("/", "<"), all=false))) => :n_segments,
         symbol="A"
     )
 
     # now use n_segments to compute the index of the segment on the axis (tip = 1, base = n_segments)
     transform!(
         mtg,
-        (node) -> ancestors(node, :n_segments, symbol="A")[1] => :n_segments_axis,
-        (node) -> length(descendants!(node, :length, symbol="S", link=("/", "<"), all=false)) + 1 => :segment_index_on_axis,
+        (node -> ancestors(node, :n_segments, symbol="A")[1]) => :n_segments_axis,
+        (node -> isleaf(node) ? 1 : length(descendants!(node, :length, symbol="S", link=("/", "<"), all=false)) + 1) => :segment_index_on_axis,
         symbol="S"
     )
 
@@ -285,10 +309,14 @@ function compute_all_mtg_data(mtg_file, new_mtg_file, csv_file)
         # These are the complete mtgs, with the full topology and dimensions.
         # The others are only partial mtgs with the total biomass.
         transform!(mtg, :length_mm => :length)
-        transform!(mtg, :diameter_mm => :diameter, symbol="S") # diameter of the segment in mm
+        transform!(mtg, :diameter_mm => :diameter, symbol="S", ignore_nothing=true) # diameter of the segment in mm
 
         # Compute extra data:
         compute_data_mtg!(mtg)
+        # else
+        # transform!(mtg, :circonference_mm => (x -> (x / 10) / π) => :diameter, ignore_nothing=true) # diameter of the segment in mm
+        #! The diameter was not measured on these branches, we use the one from the point cloud
+        # mtg.cross_section = compute_cross_section(mtg)
     end
 
     # write the resulting mtg to disk:
@@ -299,7 +327,7 @@ function compute_all_mtg_data(mtg_file, new_mtg_file, csv_file)
         DataFrame(
             mtg,
             [
-                :density, :length, :diameter, :axis_length, :branching_order,
+                :density, :density_fresh, :length, :diameter, :axis_length, :branching_order,
                 :segment_index_on_axis, :mass_g, :volume, :volume_subtree, :cross_section,
                 :cross_section_children, :cross_section_leaves, :n_segments_axis,
                 :number_leaves, :pathlength_subtree, :segment_subtree,
@@ -360,7 +388,7 @@ function segmentize_mtgs(in_folder, out_folder)
 
     # Modifying the format of the MTG to match the one from the field, i.e. with segments and axis instead of nodes
     for i in mtg_files
-        segmentize_mtg(
+        enrich_plantscan3d_mtg(
             joinpath(in_folder, i),
             joinpath(out_folder, i),
         )
@@ -374,7 +402,7 @@ Transform the input mtg from plantscan3d into an mtg with segments and axis. Seg
 nodes describing the portion of the branch between two branching points. Axis is the
 upper-scale grouping following segments, *i.e.* segments with a "/" or "<" link.
 """
-function segmentize_mtg(in_file, out_file)
+function enrich_plantscan3d_mtg(in_file, out_file)
     # in_folder = joinpath("0-data", "3-mtg_lidar_plantscan3d", "1-raw_output")
     # out_folder = joinpath("0-data", "3-mtg_lidar_plantscan3d", "3-raw_output_segmentized")
     # out_file = joinpath(out_folder, mtg_files[1])
@@ -384,7 +412,7 @@ function segmentize_mtg(in_file, out_file)
     # Compute internode length and then cumulate the lenghts when deleting.
 
     # Step 1: computes the length of each node:
-    transform!(mtg, compute_length_coord => :length_node, scale=2) # length is in meters
+    transform!(mtg, compute_length_coord => :length, scale=2) # length is in meters
 
     # Step 2: cumulate the length of all nodes in a segment for each segment node:
     transform!(mtg, cumul_length_segment => :length, scale=2, filter_fun=is_seg)
@@ -426,7 +454,7 @@ function segmentize_mtg(in_file, out_file)
     # Last step, we add the index as in the field, *i.e.* the axis nodes are indexed following
     # their topological order, and the segments are indexed following their position on the axis:
     transform!(mtg, (x -> 1) => :index, symbol="A")
-    transform!(mtg, (node -> A_indexing(node)) => :index, symbol="A")
+    transform!(mtg, A_indexing => :index, symbol="A")
     transform!(mtg, (node -> index!(node, node[:index])), symbol="A")
 
     # NB: this is done in 3 steps because the index is not a node attribute at first (it
@@ -540,14 +568,14 @@ function S_indexing(node)
     end
 end
 
-function cross_section_stat_mod_all(node; symbol="N")
-    max(
-        0.0,
-        0.520508 * node[:cross_section_pipe] + 0.0153365 * node[:pathlength_subtree] +
-        6.38394 * node[:branching_order] + 10.9389 * node[:segment_index_on_axis] - 10.137 * node[:number_leaves] +
-        4.46843 * node[:segment_subtree]
-    )
-end
+# function cross_section_stat_mod_all(node; symbol="N")
+#     max(
+#         0.0,
+#         0.520508 * node[:cross_section_pipe] + 0.0153365 * node[:pathlength_subtree] +
+#         6.38394 * node[:branching_order] + 10.9389 * node[:segment_index_on_axis] - 10.137 * node[:number_leaves] +
+#         4.46843 * node[:segment_subtree]
+#     )
+# end
 end
 
 
