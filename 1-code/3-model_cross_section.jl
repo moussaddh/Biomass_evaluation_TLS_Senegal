@@ -250,6 +250,15 @@ md"""
 We first check the total length of the branch as measured manually (sum of all segments lengths) and using lidar + plantscan3d (sum of all nodes lengths).
 """
 
+# ╔═╡ 6ace5df0-a83c-43da-b8f3-4906ea9941b3
+md"""
+## Base diameter
+
+Let's review the branches' base diameter. The predicted base diameter should equal the measurement, because it is used to initialize the pipe model, which in turn is also used a predictor for the structural model.
+
+The main hypothesis here is that the structural model is used at tree scale, and that the diameter of the trunk is accurately sampled with lidar, so the error is minimal.
+"""
+
 # ╔═╡ a3fef18c-b3c7-4a67-9876-6af3a1968afe
 md"""
 #### Volume
@@ -788,6 +797,10 @@ function compute_data_mtg_lidar!(mtg, fresh_density, dry_density, model, first_c
     transform!(mtg, :cross_section_pipe => (x -> sqrt(x / π) * 2.0) => :diameter_pipe, symbol="N")
     transform!(mtg, :cross_section_stat_mod => (x -> sqrt(x / π) * 2.0) => :diameter_stat_mod, symbol="N")
 
+	mtg[:diameter_sm] = descendants(mtg, :diameter_stat_mod, symbol="N", ignore_nothing=true) |> first
+	mtg[:diameter_pipe] = descendants(mtg, :diameter_pipe, symbol="N", ignore_nothing=true) |> first
+	mtg[:diameter_ps3d] = descendants(mtg, :diameter_ps3d, symbol="N", ignore_nothing=true) |> first
+
     mtg[:volume_ps3d] = sum(descendants(mtg, :volume_ps3d, symbol="N"))
     mtg[:volume_stat_mod] = sum(descendants(mtg, :volume_stat_mod, symbol="N"))
     mtg[:volume_pipe] = sum(descendants(mtg, :volume_pipe, symbol="N"))
@@ -863,6 +876,9 @@ function summarize_data(mtg_files, dir_path_lidar, dir_path_manual, dir_path_lid
             evaluations,
             DataFrame(
                 :branch => i,
+				:diameter_sm => mtg_lidar_model[:diameter_sm],
+				:diameter_pipe => mtg_lidar_model[:diameter_pipe],
+				:diameter_ps3d => mtg_lidar_model[:diameter_ps3d],
                 :volume_ps3d => mtg_lidar_model[:volume_ps3d],
                 :volume_stat_mod => mtg_lidar_model[:volume_stat_mod],
                 :volume_pipe => mtg_lidar_model[:volume_pipe],
@@ -873,7 +889,8 @@ function summarize_data(mtg_files, dir_path_lidar, dir_path_manual, dir_path_lid
                 :dry_mass_stat_mod => mtg_lidar_model[:dry_mass_stat_mod],
                 :dry_mass_pipe => mtg_lidar_model[:dry_mass_pipe],
                 :length_lidar => mtg_lidar_model[:total_length],
-                :length_manual => mtg_manual[:length],
+                :diameter_manual => mtg_manual[:diameter],
+				:length_manual => mtg_manual[:length],
                 :volume_manual => mtg_manual[:volume],
                 :fresh_mass_manual => mtg_manual[:fresh_mass],
             )
@@ -1014,6 +1031,24 @@ let
 		mapping(
 			:length_manual => (x -> x / 1000) => "Measured total length (m)",
 			:value => (x -> x / 1000) => "Predicted total length (m)",
+			marker=:branch => "Branch"
+		) *
+		visual(Scatter, markersize=20, alpha=0.8)
+
+    draw(plt_length_branches)
+end
+
+# ╔═╡ 6c280d12-eaa7-4adb-800b-73130ed9e477
+let
+	df_ = DataFrames.stack(select(df_evaluations, :branch, Cols(x -> startswith(x, "diameter"))), Not([:branch, :diameter_manual]))	
+	filter!(x -> !isnothing(x.diameter_manual), df_)
+    
+	plt_length_branches =
+		abline + 
+        data(df_) *
+		mapping(
+			:diameter_manual => (x -> x / 1000) => "Measured base diameter (mm)",
+			:value => (x -> x / 1000) => "Predicted base diameter (mm)",
 			marker=:branch => "Branch"
 		) *
 		visual(Scatter, markersize=20, alpha=0.8)
@@ -2952,6 +2987,8 @@ version = "3.5.0+0"
 # ╟─915ba9a6-3ee8-4605-a796-354e7c293f55
 # ╟─60c1de7d-513b-43f7-8ef2-e5b8a2d382c0
 # ╟─3eccaecd-d1bf-48a7-9ee2-ebe5d2e3170c
+# ╟─6ace5df0-a83c-43da-b8f3-4906ea9941b3
+# ╠═6c280d12-eaa7-4adb-800b-73130ed9e477
 # ╟─a3fef18c-b3c7-4a67-9876-6af3a1968afe
 # ╟─36315f52-fdb4-4872-9bcb-f5f8a9e1fb60
 # ╟─05830ef6-6e1b-4e41-8ae9-72b457914d38
@@ -2980,12 +3017,12 @@ version = "3.5.0+0"
 # ╟─21fd863d-61ed-497e-ba3c-5f327e354cee
 # ╟─371522b4-b74c-483b-aff6-cbfe65e95fa6
 # ╟─0195ac30-b64f-409a-91ad-e68cf37d7c3b
-# ╠═77486fa7-318d-4397-a792-70fd8d2148e3
+# ╟─77486fa7-318d-4397-a792-70fd8d2148e3
 # ╟─84af5ab6-74b9-4231-8ac8-1b1b9018ccf9
 # ╟─c04e308c-bc7c-473d-a7d2-5104bfe1d934
 # ╟─4eeac17e-26a0-43c8-ab3e-358d4421a1b7
 # ╠═97871566-4904-4b40-a631-98f7e837a2f4
-# ╟─d7a3c496-0ef0-454b-9e32-e5835928f4d5
+# ╠═d7a3c496-0ef0-454b-9e32-e5835928f4d5
 # ╟─eb39ed1b-6dee-4738-a762-13b759f74411
 # ╟─ee46e359-36bd-49c4-853c-d3ff29888473
 # ╟─b2e75112-be43-4df9-86df-2eeeb58f47c3
