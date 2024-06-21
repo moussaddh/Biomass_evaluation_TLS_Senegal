@@ -243,6 +243,13 @@ md"""
 ### Computing the volumes and biomass of the branches using the model
 """
 
+# ╔═╡ 60c1de7d-513b-43f7-8ef2-e5b8a2d382c0
+md"""
+## Length
+
+We first check the total length of the branch as measured manually (sum of all segments lengths) and using lidar + plantscan3d (sum of all nodes lengths).
+"""
+
 # ╔═╡ a3fef18c-b3c7-4a67-9876-6af3a1968afe
 md"""
 #### Volume
@@ -292,6 +299,9 @@ Same plot but showing which branch density was measured or not:
 md"""
 ## References
 """
+
+# ╔═╡ 1327b095-40b5-4434-86ab-7ece59a1528e
+abline = mapping([0], [1]) * visual(ABLines, color=:gray, linestyle=:dash)
 
 # ╔═╡ 5dc0b0d9-dde6-478b-9bee-b9503a3a4d82
 function rename_var(x)
@@ -728,8 +738,6 @@ function compute_data_mtg_lidar!(mtg, fresh_density, dry_density, model, first_c
 	transform!(
         mtg,
         (node -> sum(filter(x -> x !== nothing, descendants!(node, :length, symbol="N", self=true)))) => :pathlength_subtree,
-        symbol="N",
-        filter_fun=x -> x[:length] !== nothing
     )
 
 	# Identify which node is a segment root:
@@ -792,6 +800,9 @@ function compute_data_mtg_lidar!(mtg, fresh_density, dry_density, model, first_c
     mtg[:dry_mass_stat_mod] = mtg[:volume_stat_mod] * dry_density * 1e-3 # in g
     mtg[:dry_mass_pipe] = mtg[:volume_pipe] * dry_density * 1e-3 # in g
 
+	# Total branch length
+	mtg[:total_length] = mtg[:pathlength_subtree]
+	
     # Clean-up the cached variables:
     clean_cache!(mtg)
 
@@ -861,7 +872,7 @@ function summarize_data(mtg_files, dir_path_lidar, dir_path_manual, dir_path_lid
                 :dry_mass_ps3d => mtg_lidar_model[:dry_mass_ps3d],
                 :dry_mass_stat_mod => mtg_lidar_model[:dry_mass_stat_mod],
                 :dry_mass_pipe => mtg_lidar_model[:dry_mass_pipe],
-                :length_lidar => mtg_lidar_model[:length],
+                :length_lidar => mtg_lidar_model[:total_length],
                 :length_manual => mtg_manual[:length],
                 :volume_manual => mtg_manual[:volume],
                 :fresh_mass_manual => mtg_manual[:fresh_mass],
@@ -887,57 +898,45 @@ let
 	#df_ = filter(x -> x.variable != "volume_ps3d", df_vol)
 	df_ = filter(x -> !isnothing(x.volume_manual), df_vol)
     plt_volume_branches =
-        data(df_) *
-        (
-            mapping(
-                :volume_manual => "Measured volume (length x cross-section, mm³)",
-                :volume_manual => "Predicted volume (mm³)") * visual(Lines) +
-            mapping(
-                :volume_manual => "Measured volume (length x cross-section, mm³)",
-                :value => "Predicted volume (mm³)",
-                color=:variable => (x -> rename_var(replace(x, "volume_" => ""))) => "Model",
-                marker=:branch => "Branch"
-			) *
-            visual(Scatter, markersize=20, alpha=0.8)
-        )
-    p_vol = draw(plt_volume_branches, palettes=(; color=colors))
+		abline + 
+		data(df_) *
+		mapping(
+			:volume_manual => "Measured volume (length x cross-section, mm³)",
+			:value => "Predicted volume (mm³)",
+			color=:variable => (x -> rename_var(replace(x, "volume_" => ""))) => "Model",
+			marker=:branch => "Branch"
+		) *
+		visual(Scatter, markersize=20, alpha=0.8)
+    p_vol = draw(plt_volume_branches, palettes=(; color=colors), axis=(;aspect=1))
 end
 
 # ╔═╡ fa2acb23-a9f7-4324-99e4-923b0811591f
 let
     plt_mass_branches =
+		abline + 
         data(df_mass) *
-        (
-            mapping(
-                :fresh_mass_manual => "Measured fresh mass (g)",
-                :fresh_mass_manual => "Predicted fresh mass (g)") * visual(Lines) +
-            mapping(
-                :fresh_mass_manual => "Measured fresh mass (g)",
-                :value => "Predicted fresh mass (g)",
-                color=:variable => (x -> rename_var(replace(x, "fresh_mass_" => ""))) => "Model",
-                marker=:branch => "Branch"
-			) *
-            visual(Scatter, markersize=20, alpha=0.8)
-        )
+		mapping(
+			:fresh_mass_manual => "Measured fresh mass (g)",
+			:value => "Predicted fresh mass (g)",
+			color=:variable => (x -> rename_var(replace(x, "fresh_mass_" => ""))) => "Model",
+			marker=:branch => "Branch"
+		) *
+		visual(Scatter, markersize=20, alpha=0.8)
     p_mass = draw(plt_mass_branches, palettes=(; color=colors))
 end
 
 # ╔═╡ 9dd9d67b-7856-43e1-9859-76a5463428ce
 article_figure = let
     plt_mass_branches =
-        data(df_mass) *
-        (
-            mapping(
-                :fresh_mass_manual => "Measured fresh mass (g)",
-                :fresh_mass_manual => "Predicted fresh mass (g)") * visual(Lines) +
-            mapping(
-                :fresh_mass_manual => "Measured fresh mass (g)",
-                :value => "Predicted fresh mass (g)",
-                color=:variable => (x -> rename_var(replace(x, "fresh_mass_" => ""))) => "Model",
-                marker=:origin => "Branch"
-			) *
-            visual(Scatter, markersize=20, alpha=0.8)
-        )
+		abline + 
+		data(df_mass) *
+		mapping(
+			:fresh_mass_manual => "Measured fresh mass (g)",
+			:value => "Predicted fresh mass (g)",
+			color=:variable => (x -> rename_var(replace(x, "fresh_mass_" => ""))) => "Model",
+			marker=:origin => "Branch"
+		) *
+		visual(Scatter, markersize=20, alpha=0.8)
     p_mass = draw(plt_mass_branches, palettes=(; color=colors))
 end
 
@@ -947,20 +946,16 @@ save("../2-results/2-plots/biomass_evaluation.png", article_figure; px_per_unit=
 # ╔═╡ 4dcd6a1e-ebc9-43df-a4c0-6a7702d1491e
 let
     plt_mass_branches =
+		abline + 
         data(filter(row -> row.origin == "Validation", df_mass)) *
-        (
-            mapping(
-                :fresh_mass_manual => "Measured fresh mass (g)",
-                :fresh_mass_manual => "Predicted fresh mass (g)") * visual(Lines) +
-            mapping(
-                :fresh_mass_manual => "Measured fresh mass (g)",
-                :value => "Predicted fresh mass (g)",
-                color=:variable => (x -> rename_var(replace(x, "fresh_mass_" => ""))) => "Model",
-                #marker=:origin => "Branch"
-			) *
-            visual(Scatter, markersize=20, alpha=0.8)
-        )
-    p_mass = draw(plt_mass_branches, palettes=(; color=colors))
+		mapping(
+			:fresh_mass_manual => "Measured fresh mass (g)",
+			:value => "Predicted fresh mass (g)",
+			color=:variable => (x -> rename_var(replace(x, "fresh_mass_" => ""))) => "Model",
+			#marker=:origin => "Branch"
+		) *
+		visual(Scatter, markersize=20, alpha=0.8)
+    p_mass = draw(plt_mass_branches, palettes=(; color=colors), axis=(;aspect=1))
 end
 
 # ╔═╡ 8239f0f5-041e-47d0-9623-570c4acf542e
@@ -996,24 +991,35 @@ end
 let
 	df = leftjoin(DataFrames.transform(df_mass, :branch => (x -> lowercase.(x)) => :branch), df_density, on = :branch => :unique_branch)
     plt_mass_branches =
+		abline +
         data(filter(row -> row.origin == "Validation", df)) *
-        (
-            mapping(
-                :fresh_mass_manual => "Measured fresh mass (g)",
-                :fresh_mass_manual => "Predicted fresh mass (g)") * visual(Lines) +
-            mapping(
-                :fresh_mass_manual => "Measured fresh mass (g)",
-                :value => "Predicted fresh mass (g)",
-                color=:variable => (x -> rename_var(replace(x, "fresh_mass_" => ""))) => "Model",
-                marker=:measured_fresh_density => "Measured density",
-			) *
-            visual(Scatter, markersize=20, alpha=0.8)
-        )
-    p_mass = draw(plt_mass_branches, palettes=(; color=colors))
+		mapping(
+			:fresh_mass_manual => "Measured fresh mass (g)",
+			:value => "Predicted fresh mass (g)",
+			color=:variable => (x -> rename_var(replace(x, "fresh_mass_" => ""))) => "Model",
+			marker=:measured_fresh_density => "Measured density",
+		) *
+		visual(Scatter, markersize=20, alpha=0.8)
+    p_mass = draw(plt_mass_branches, palettes=(; color=colors), axis=(;aspect=1))
 end
 
-# ╔═╡ 9d46d86e-4ffe-4045-bf26-c902a5b244c1
-filter(row -> row.fresh_mass_stat_mod > 100000, select(dropmissing(df_evaluations, [:fresh_mass_stat_mod, :fresh_mass_manual]), [:branch, :fresh_mass_stat_mod, :fresh_mass_manual]))
+# ╔═╡ 3eccaecd-d1bf-48a7-9ee2-ebe5d2e3170c
+let
+	df_ = DataFrames.stack(select(df_evaluations, :branch, Cols(x -> startswith(x, "length"))), Not([:branch, :length_manual]))	
+	filter!(x -> !isnothing(x.length_manual), df_)
+    
+	plt_length_branches =
+		abline + 
+        data(df_) *
+		mapping(
+			:length_manual => (x -> x / 1000) => "Measured total length (m)",
+			:value => (x -> x / 1000) => "Predicted total length (m)",
+			marker=:branch => "Branch"
+		) *
+		visual(Scatter, markersize=20, alpha=0.8)
+
+    draw(plt_length_branches)
+end
 
 # ╔═╡ 666e9daf-e28f-4e14-b52a-bcc6b5aadb67
 cross_section_stat_mod_all = cross_section_stat_mod
@@ -2943,16 +2949,17 @@ version = "3.5.0+0"
 # ╠═9290e9bf-4c43-47c7-96ec-8b44ad3c6b23
 # ╟─466aa3b3-4c78-4bb7-944d-5d55128f8cf6
 # ╠═87140df4-3fb5-443c-a667-be1f19b016f6
-# ╠═915ba9a6-3ee8-4605-a796-354e7c293f55
+# ╟─915ba9a6-3ee8-4605-a796-354e7c293f55
+# ╟─60c1de7d-513b-43f7-8ef2-e5b8a2d382c0
+# ╟─3eccaecd-d1bf-48a7-9ee2-ebe5d2e3170c
 # ╟─a3fef18c-b3c7-4a67-9876-6af3a1968afe
 # ╟─36315f52-fdb4-4872-9bcb-f5f8a9e1fb60
 # ╟─05830ef6-6e1b-4e41-8ae9-72b457914d38
 # ╟─0409c90e-fc40-4f02-8805-9feb6a7f8eb9
 # ╟─172337e8-6423-4fd5-a36c-3dc823df93b0
 # ╟─fa2acb23-a9f7-4324-99e4-923b0811591f
-# ╠═9d46d86e-4ffe-4045-bf26-c902a5b244c1
 # ╟─c9090d58-4fd6-4b4c-ad14-bf2f611cccfd
-# ╠═9dd9d67b-7856-43e1-9859-76a5463428ce
+# ╟─9dd9d67b-7856-43e1-9859-76a5463428ce
 # ╠═53372fb0-c6a0-440f-acdf-bad5b205db22
 # ╟─7fdbd52d-969f-47e5-9628-4de6077c8ff3
 # ╟─4dcd6a1e-ebc9-43df-a4c0-6a7702d1491e
@@ -2964,7 +2971,8 @@ version = "3.5.0+0"
 # ╟─ddb4f5a5-5e2b-43a1-8e3f-09c3dad8870f
 # ╟─641a6930-19e5-4775-bfd6-2483fd54737a
 # ╟─30f8608f-564e-4ffc-91b2-1f104fb46c1e
-# ╟─0a19ac96-a706-479d-91b5-4ea3e091c3e8
+# ╟─1327b095-40b5-4434-86ab-7ece59a1528e
+# ╠═0a19ac96-a706-479d-91b5-4ea3e091c3e8
 # ╟─5dc0b0d9-dde6-478b-9bee-b9503a3a4d82
 # ╟─ffe53b41-96bd-4f44-b313-94aabdc8b1a6
 # ╟─12d7aca9-4fa8-4461-8077-c79a99864391
