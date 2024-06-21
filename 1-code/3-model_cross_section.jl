@@ -727,15 +727,6 @@ end
 
 # ╔═╡ 77486fa7-318d-4397-a792-70fd8d2148e3
 function compute_data_mtg_lidar!(mtg, fresh_density, dry_density, model, first_cross_section)
-    if (:radius in names(mtg))
-        transform!(
-            mtg,
-            :radius => (x -> x * 2 * 1000) => :diameter_ps3d,
-            :radius => (x -> π * (x * 1000)^2) => :cross_section_ps3d,
-            symbol="N"
-        ) # diameter in mm
-    end
-
 	transform!(
 		mtg, 
 		compute_length_coord => :length, 
@@ -763,11 +754,6 @@ function compute_data_mtg_lidar!(mtg, fresh_density, dry_density, model, first_c
     branching_order!(mtg, ascend=false)
     # We use basipetal topological order (from tip to base) to allow comparisons between branches of
     # different ages (the last emitted segment will always be of order 1).
-
-	# Use the first cross-section for the first value to apply the pipe-model:
-    if first_cross_section === nothing || length(mtg) <= 3
-        first_cross_section = π * ((descendants(mtg, :diameter_ps3d, ignore_nothing=true, recursivity_level=5)[1] / 2.0)^2)
-	end
 
     # All variables related to radius come from ps3d:
     transform!(
@@ -848,9 +834,23 @@ function compute_volume_model(branch, dir_path_lidar, dir_path_manual, df_densit
 
     mtg_lidar_model = read_mtg(joinpath(dir_path_lidar, branch_lidar * ".mtg"))
 
-	# We take the first value of the cross-section as the one from the measurement:
-	first_cross_section = descendants(mtg_manual, :cross_section, self=true, ignore_nothing=true)  |> first
+	if (:radius in names(mtg_lidar_model))
+        transform!(
+            mtg_lidar_model,
+            :radius => (x -> x * 2 * 1000) => :diameter_ps3d,
+            :radius => (x -> π * (x * 1000)^2) => :cross_section_ps3d,
+            symbol="N"
+        ) # diameter in mm
+    end
 
+	if length(mtg_manual) <= 3
+		# We don't have a measurement for those ones, so we use the value from the pipe-model:
+        first_cross_section = π * ((descendants(mtg_lidar_model, :diameter_ps3d, ignore_nothing=true, recursivity_level=5)[1] / 2.0)^2)
+	else
+		# We take the first value of the cross-section as the one from the measurement (better):
+		first_cross_section = descendants(mtg_manual, :cross_section, self=true, ignore_nothing=true)  |> first
+	end
+	
 	#NB: this is because the cross-section of the branches are not well estimated using ps3d (we know that already), but it will be well estimated at tree scale because the diameter of the tree is way larger.
 	
     compute_data_mtg_lidar!(mtg_lidar_model, fresh_density, dry_density, model, first_cross_section)
@@ -876,7 +876,7 @@ function summarize_data(mtg_files, dir_path_lidar, dir_path_manual, dir_path_lid
             evaluations,
             DataFrame(
                 :branch => i,
-				:diameter_sm => mtg_lidar_model[:diameter_sm],
+				:diameter_stat_mod => mtg_lidar_model[:diameter_sm],
 				:diameter_pipe => mtg_lidar_model[:diameter_pipe],
 				:diameter_ps3d => mtg_lidar_model[:diameter_ps3d],
                 :volume_ps3d => mtg_lidar_model[:volume_ps3d],
@@ -1048,12 +1048,13 @@ let
         data(df_) *
 		mapping(
 			:diameter_manual => (x -> x / 1000) => "Measured base diameter (mm)",
-			:value => (x -> x / 1000) => "Predicted base diameter (mm)",
-			marker=:branch => "Branch"
+			:value => (x -> x / 1000) => "Initialized base diameter (mm)",
+			color=:variable => (x -> rename_var(replace(x, "diameter_" => ""))) => "Model",
+			marker=:branch => "Branch",
 		) *
 		visual(Scatter, markersize=20, alpha=0.8)
 
-    draw(plt_length_branches)
+    draw(plt_length_branches, palettes=(; color=colors))
 end
 
 # ╔═╡ 666e9daf-e28f-4e14-b52a-bcc6b5aadb67
@@ -2954,7 +2955,7 @@ version = "3.5.0+0"
 # ╟─8b711c1e-7d4e-404b-b2c8-87f536728fee
 # ╠═6bee7b4a-c3a1-4562-a17f-71335b8d39ae
 # ╟─220dfbff-15fc-4e75-a6a2-39e60c08e8dc
-# ╟─492fc741-7a3b-4992-a453-fcac2bbf35ad
+# ╠═492fc741-7a3b-4992-a453-fcac2bbf35ad
 # ╟─75e8003d-709a-4bec-8829-979230468e33
 # ╟─7e58dc6e-78ec-4ff3-8e99-97756c3a8914
 # ╟─068bccf7-7d01-40f5-b06b-97f6f51abcdd
@@ -2988,7 +2989,7 @@ version = "3.5.0+0"
 # ╟─60c1de7d-513b-43f7-8ef2-e5b8a2d382c0
 # ╟─3eccaecd-d1bf-48a7-9ee2-ebe5d2e3170c
 # ╟─6ace5df0-a83c-43da-b8f3-4906ea9941b3
-# ╠═6c280d12-eaa7-4adb-800b-73130ed9e477
+# ╟─6c280d12-eaa7-4adb-800b-73130ed9e477
 # ╟─a3fef18c-b3c7-4a67-9876-6af3a1968afe
 # ╟─36315f52-fdb4-4872-9bcb-f5f8a9e1fb60
 # ╟─05830ef6-6e1b-4e41-8ae9-72b457914d38
@@ -3017,7 +3018,7 @@ version = "3.5.0+0"
 # ╟─21fd863d-61ed-497e-ba3c-5f327e354cee
 # ╟─371522b4-b74c-483b-aff6-cbfe65e95fa6
 # ╟─0195ac30-b64f-409a-91ad-e68cf37d7c3b
-# ╟─77486fa7-318d-4397-a792-70fd8d2148e3
+# ╠═77486fa7-318d-4397-a792-70fd8d2148e3
 # ╟─84af5ab6-74b9-4231-8ac8-1b1b9018ccf9
 # ╟─c04e308c-bc7c-473d-a7d2-5104bfe1d934
 # ╟─4eeac17e-26a0-43c8-ab3e-358d4421a1b7

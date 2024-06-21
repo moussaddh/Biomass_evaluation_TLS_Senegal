@@ -313,10 +313,13 @@ function compute_all_mtg_data(mtg_file, new_mtg_file, csv_file)
 
         # Compute extra data:
         compute_data_mtg!(mtg)
-        # else
-        # transform!(mtg, :circonference_mm => (x -> (x / 10) / π) => :diameter, ignore_nothing=true) # diameter of the segment in mm
+    else
         #! The diameter was not measured on these branches, we use the one from the point cloud
-        # mtg.cross_section = compute_cross_section(mtg)
+        # transform!(mtg, :circonference_mm => (x -> (x / 10) / π) => :diameter, ignore_nothing=true) # diameter of the segment in mm
+        if mtg.circonference_mm !== nothing # Only for faidherbia
+            mtg.diameter = (mtg.circonference_mm / 10) / π
+            mtg.cross_section = compute_cross_section(mtg)
+        end
     end
 
     # write the resulting mtg to disk:
