@@ -1,5 +1,5 @@
 ### A Pluto.jl notebook ###
-# v0.19.42
+# v0.19.43
 
 using Markdown
 using InteractiveUtils
@@ -254,9 +254,9 @@ We first check the total length of the branch as measured manually (sum of all s
 md"""
 ## Base diameter
 
-Let's review the branches' base diameter. The predicted base diameter should equal the measurement, because it is used to initialize the pipe model, which in turn is also used a predictor for the structural model.
+Let's review the branches' base diameter. The predicted base diameter should equal the measurement for both the pipe and the structural models. This is because this base diameter is used to initialize the pipe model, which is also used as a predictor for the structural model.
 
-The main hypothesis here is that the structural model is used at tree scale, and that the diameter of the trunk is accurately sampled with lidar, so the error is minimal.
+The central hypothesis is that the structural model is used at tree scale and that the trunk's diameter is accurately sampled with lidar, so the error is minimal.
 """
 
 # ╔═╡ a3fef18c-b3c7-4a67-9876-6af3a1968afe
@@ -787,7 +787,7 @@ function compute_data_mtg_lidar!(mtg, fresh_density, dry_density, model, first_c
 	mtg[:diameter_pipe] = descendants(mtg, :diameter_pipe, symbol="N", ignore_nothing=true) |> first
 	mtg[:diameter_ps3d] = descendants(mtg, :diameter_ps3d, symbol="N", ignore_nothing=true) |> first
 
-    mtg[:volume_ps3d] = sum(descendants(mtg, :volume_ps3d, symbol="N"))
+	mtg[:volume_ps3d] = sum(filter(x -> !isnan(x), descendants(mtg, :volume_ps3d, symbol="N")))
     mtg[:volume_stat_mod] = sum(descendants(mtg, :volume_stat_mod, symbol="N"))
     mtg[:volume_pipe] = sum(descendants(mtg, :volume_pipe, symbol="N"))
 
@@ -841,15 +841,20 @@ function compute_volume_model(branch, dir_path_lidar, dir_path_manual, df_densit
             :radius => (x -> π * (x * 1000)^2) => :cross_section_ps3d,
             symbol="N"
         ) # diameter in mm
+	else
+		@info "Radius not found in lidar mtg for branch $branch"
     end
 
 	if length(mtg_manual) <= 3
 		# We don't have a measurement for those ones, so we use the value from the pipe-model:
-        first_cross_section = π * ((descendants(mtg_lidar_model, :diameter_ps3d, ignore_nothing=true, recursivity_level=5)[1] / 2.0)^2)
+        #first_cross_section = π * ((descendants(mtg_lidar_model, :diameter_ps3d, ignore_nothing=true, recursivity_level=5)[1] / 2.0)^2)
+		first_cross_section = π * (mtg_manual[:diameter] / 2.0)^2
 	else
 		# We take the first value of the cross-section as the one from the measurement (better):
 		first_cross_section = descendants(mtg_manual, :cross_section, self=true, ignore_nothing=true)  |> first
 	end
+	
+	mtg_manual[:diameter] = sqrt(first_cross_section / π) * 2.0
 	
 	#NB: this is because the cross-section of the branches are not well estimated using ps3d (we know that already), but it will be well estimated at tree scale because the diameter of the tree is way larger.
 	
@@ -907,7 +912,7 @@ df_evaluations = summarize_data(mtg_files, dir_path_lidar, dir_path_manual, dir_
 begin
 	df_vol = DataFrames.stack(select(df_evaluations, :branch, Cols(x -> startswith(x, "volume"))), Not([:branch, :volume_manual]))
 	df_mass = DataFrames.stack(select(df_evaluations, :branch, Cols(x -> startswith(x, "fresh"))), Not([:branch, :fresh_mass_manual]))
-	df_mass.origin .= [i in ["fa_g1_1561", "fa_g1_tower12", "fa_g2_1538", "fa_g2_1606", "Tree_EC5"] ? "Training" : "Validation" for i in df_mass.branch]
+	df_mass.origin .= [replace(i, "_cor" => "") in ["fa_g1_1561", "fa_g1_tower12", "fa_g2_1538", "fa_g2_1606", "Tree_EC5"] ? "Training" : "Validation" for i in df_mass.branch]
 end;
 
 # ╔═╡ 36315f52-fdb4-4872-9bcb-f5f8a9e1fb60
@@ -1006,7 +1011,7 @@ end
 
 # ╔═╡ 641a6930-19e5-4775-bfd6-2483fd54737a
 let
-	df = leftjoin(DataFrames.transform(df_mass, :branch => (x -> lowercase.(x)) => :branch), df_density, on = :branch => :unique_branch)
+	df = leftjoin(DataFrames.transform(df_mass, :branch => (x -> lowercase.(replace.(x, "_cor" => ""))) => :branch), df_density, on = :branch => :unique_branch)
     plt_mass_branches =
 		abline +
         data(filter(row -> row.origin == "Validation", df)) *
@@ -1047,8 +1052,8 @@ let
 		abline + 
         data(df_) *
 		mapping(
-			:diameter_manual => (x -> x / 1000) => "Measured base diameter (mm)",
-			:value => (x -> x / 1000) => "Initialized base diameter (mm)",
+			:diameter_manual => "Measured base diameter (mm)",
+			:value => "Initialized base diameter (mm)",
 			color=:variable => (x -> rename_var(replace(x, "diameter_" => ""))) => "Model",
 			marker=:branch => "Branch",
 		) *
@@ -2955,7 +2960,7 @@ version = "3.5.0+0"
 # ╟─8b711c1e-7d4e-404b-b2c8-87f536728fee
 # ╠═6bee7b4a-c3a1-4562-a17f-71335b8d39ae
 # ╟─220dfbff-15fc-4e75-a6a2-39e60c08e8dc
-# ╠═492fc741-7a3b-4992-a453-fcac2bbf35ad
+# ╟─492fc741-7a3b-4992-a453-fcac2bbf35ad
 # ╟─75e8003d-709a-4bec-8829-979230468e33
 # ╟─7e58dc6e-78ec-4ff3-8e99-97756c3a8914
 # ╟─068bccf7-7d01-40f5-b06b-97f6f51abcdd
@@ -3018,7 +3023,7 @@ version = "3.5.0+0"
 # ╟─21fd863d-61ed-497e-ba3c-5f327e354cee
 # ╟─371522b4-b74c-483b-aff6-cbfe65e95fa6
 # ╟─0195ac30-b64f-409a-91ad-e68cf37d7c3b
-# ╠═77486fa7-318d-4397-a792-70fd8d2148e3
+# ╟─77486fa7-318d-4397-a792-70fd8d2148e3
 # ╟─84af5ab6-74b9-4231-8ac8-1b1b9018ccf9
 # ╟─c04e308c-bc7c-473d-a7d2-5104bfe1d934
 # ╟─4eeac17e-26a0-43c8-ab3e-358d4421a1b7

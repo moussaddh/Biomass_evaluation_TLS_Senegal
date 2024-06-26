@@ -303,9 +303,10 @@ function compute_all_mtg_data(mtg_file, new_mtg_file, csv_file)
 
     transform!(mtg, [:dry_weight, :volume_sample_cm3] => ((x, y) -> x / y) => :density, symbol="S", ignore_nothing=true)
     transform!(mtg, [:mass_fresh_sample_g, :volume_sample_cm3] => ((x, y) -> x / y) => :density_fresh, symbol="S", ignore_nothing=true)
-    transform!(mtg, :circonference_mm => (x -> x / π) => :diameter, ignore_nothing=true) # diameter of the segment in mm
 
     if length(mtg) > 3
+        transform!(mtg, :circonference_mm => (x -> x / π) => :diameter, ignore_nothing=true) # diameter of the segment in mm
+
         # These are the complete mtgs, with the full topology and dimensions.
         # The others are only partial mtgs with the total biomass.
         transform!(mtg, :length_mm => :length)
@@ -314,12 +315,13 @@ function compute_all_mtg_data(mtg_file, new_mtg_file, csv_file)
         # Compute extra data:
         compute_data_mtg!(mtg)
     else
-        #! The diameter was not measured on these branches, we use the one from the point cloud
+        #! The diameter was not measured on these branches, we use the one from the point cloud, which is in m but named "_mm"...
+        mtg[:diameter] = mtg[:diameter_mm] * 1000.0
         # transform!(mtg, :circonference_mm => (x -> (x / 10) / π) => :diameter, ignore_nothing=true) # diameter of the segment in mm
-        if mtg.circonference_mm !== nothing # Only for faidherbia
-            mtg.diameter = (mtg.circonference_mm / 10) / π
-            mtg.cross_section = compute_cross_section(mtg)
-        end
+        # if mtg.circonference_mm !== nothing # Only for faidherbia
+        #     mtg.diameter = (mtg.circonference_mm / 10) / π
+        #     mtg.cross_section = compute_cross_section(mtg)
+        # end
     end
 
     # write the resulting mtg to disk:
