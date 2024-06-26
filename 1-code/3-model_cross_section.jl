@@ -130,8 +130,10 @@ First, we define which variables will be used in our model. In our case we will 
 # ╔═╡ 3d0a6b24-f11b-4f4f-b59b-5c40ea9be838
 #formula_all = @formula(cross_section ~ 0 + cross_section_pipe + pathlength_subtree + segment_index_on_axis)
 #formula_all = @formula(cross_section ~ 0 + cross_section_pipe +  segment_index_on_axis + axis_length)
-formula_all = @formula(cross_section ~ 0 + cross_section_pipe + number_leaves + segment_subtree)
+# formula_all = @formula(cross_section ~ 0 + cross_section_pipe + number_leaves + segment_subtree)
 #formula_all = @formula(cross_section ~ 0 + cross_section_pipe + pathlength_subtree + branching_order + segment_index_on_axis + axis_length + number_leaves + segment_subtree + n_segments_axis)
+
+formula_all = @formula(cross_section ~ 0 + cross_section_pipe + axis_length + n_segments_axis + segment_index_on_axis  + number_leaves + segment_subtree)
 
 # ╔═╡ b8800a04-dedb-44b3-82fe-385e3db1d0d5
 md"""
@@ -653,9 +655,31 @@ filter_A1_A2(x) = x.MTG.symbol == "A" && (x.MTG.index == 1 || x.MTG.index == 2)
 filter_A1_A2_S(x) = x.MTG.symbol == "S" || filter_A1_A2(x)
 
 # ╔═╡ 14fde936-fa95-471a-aafb-5d69871e5a87
-function compute_axis_length(x)
-    length_descendants = filter(x -> x !== nothing, descendants!(x, :length, symbol="S", link=("/", "<"), all=false))
-    length(length_descendants) > 0 ? sum(length_descendants) : nothing
+function compute_axis_length!(mtg)
+    # First we compute the axis length for each first node of an axis:
+    traverse!(mtg, link=("/", "+"), symbol="N") do axis_first_node
+        axis_children_lengths = descendants(axis_first_node, :length, link="<", all=false, ignore_nothing=true)
+        axis_children_length = length(axis_children_lengths) > 0 ? sum(axis_children_lengths) : 0
+        axis_first_node[:axis_length] = axis_children_length + axis_first_node[:length]
+    end
+
+    # Then we attribute this value to all nodes that are on the axis
+    transform!(mtg, (node -> first(ancestors(node, :axis_length, link=("/", "+")))) => :axis_length, link="<", symbol="N")
+
+    return nothing
+end
+
+# ╔═╡ 4cc04192-0dee-4157-8b01-782e92ffd7d4
+function compute_n_segments_axis!(mtg)
+    # First we compute the number of nodes along the axis for each first node of an axis:
+    traverse!(mtg, link=("/", "+"), symbol="N") do axis_first_node
+        axis_children_nodes = descendants(axis_first_node, link="<", all=false)
+        axis_first_node[:n_segments_axis] = length(axis_children_nodes) + 1
+    end
+
+    # Then we attribute this value to all nodes that are on the axis
+    transform!(mtg, (node -> first(ancestors(node, :n_segments_axis, link=("/", "+")))) => :n_segments_axis, link="<", symbol="N")
+    return nothing
 end
 
 # ╔═╡ e3ba9fec-c8b3-46e6-8b1d-29ab19198c9c
@@ -715,6 +739,7 @@ function cross_section_stat_mod(node, model)
         end
         node_val = node[i]
         if node_val === nothing
+			@info "missing value found for attribute $i"
             # No missing values allowed for predicting
             return missing
         end
@@ -739,7 +764,10 @@ function compute_data_mtg_lidar!(mtg, fresh_density, dry_density, model, first_c
         mtg,
         (node -> sum(filter(x -> x !== nothing, descendants!(node, :length, symbol="N", self=true)))) => :pathlength_subtree,
     )
-
+	
+	compute_axis_length!(mtg)
+	compute_n_segments_axis!(mtg)
+	
 	# Identify which node is a segment root:
     transform!(mtg, is_seg => :is_segment, symbol="N")
     transform!(mtg, segment_index_on_axis => :segment_index_on_axis, symbol="N")
@@ -3015,7 +3043,7 @@ version = "3.5.0+0"
 # ╟─641a6930-19e5-4775-bfd6-2483fd54737a
 # ╟─30f8608f-564e-4ffc-91b2-1f104fb46c1e
 # ╟─1327b095-40b5-4434-86ab-7ece59a1528e
-# ╠═0a19ac96-a706-479d-91b5-4ea3e091c3e8
+# ╟─0a19ac96-a706-479d-91b5-4ea3e091c3e8
 # ╟─5dc0b0d9-dde6-478b-9bee-b9503a3a4d82
 # ╟─ffe53b41-96bd-4f44-b313-94aabdc8b1a6
 # ╟─12d7aca9-4fa8-4461-8077-c79a99864391
@@ -3023,17 +3051,18 @@ version = "3.5.0+0"
 # ╟─21fd863d-61ed-497e-ba3c-5f327e354cee
 # ╟─371522b4-b74c-483b-aff6-cbfe65e95fa6
 # ╟─0195ac30-b64f-409a-91ad-e68cf37d7c3b
-# ╟─77486fa7-318d-4397-a792-70fd8d2148e3
+# ╠═77486fa7-318d-4397-a792-70fd8d2148e3
 # ╟─84af5ab6-74b9-4231-8ac8-1b1b9018ccf9
 # ╟─c04e308c-bc7c-473d-a7d2-5104bfe1d934
 # ╟─4eeac17e-26a0-43c8-ab3e-358d4421a1b7
-# ╠═97871566-4904-4b40-a631-98f7e837a2f4
-# ╠═d7a3c496-0ef0-454b-9e32-e5835928f4d5
+# ╟─97871566-4904-4b40-a631-98f7e837a2f4
+# ╟─d7a3c496-0ef0-454b-9e32-e5835928f4d5
 # ╟─eb39ed1b-6dee-4738-a762-13b759f74411
 # ╟─ee46e359-36bd-49c4-853c-d3ff29888473
 # ╟─b2e75112-be43-4df9-86df-2eeeb58f47c3
 # ╟─b01851d1-d9d9-4016-b02e-6d3bfc449b8a
-# ╟─14fde936-fa95-471a-aafb-5d69871e5a87
+# ╠═14fde936-fa95-471a-aafb-5d69871e5a87
+# ╠═4cc04192-0dee-4157-8b01-782e92ffd7d4
 # ╟─e3ba9fec-c8b3-46e6-8b1d-29ab19198c9c
 # ╟─9e967170-9388-43e4-8b18-baccb18f4b4e
 # ╟─979ca113-6a22-4313-a011-0aca3cefdbf7
