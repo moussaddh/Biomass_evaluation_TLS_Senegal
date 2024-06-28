@@ -58,10 +58,10 @@ using Pluto
 
 Then you can open the notebooks using these commands (copy-paste it in the Julia REPL):
 
-- Step 1: Checking estimated length from LiDAR:
+- Step 1: Training the model on acacia raddiana:
 
 ```julia
-Pluto.run(notebook = "1-code/4.1-step_1_check_LiDAR_length.jl")
+Pluto.run(notebook="1-code/2-model_cross_section_acacia.jl")
 ```
 
 - Step 2: Checking manual measurements integrity:

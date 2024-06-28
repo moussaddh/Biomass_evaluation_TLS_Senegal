@@ -7,7 +7,6 @@ using DataFrames
 
 export compute_all_mtg_data
 export bind_csv_files
-export segmentize_mtgs
 export compute_volume
 export NRMSE, RMSE, EF, nRMSE
 export structural_model!
@@ -315,6 +314,7 @@ function compute_all_mtg_data(mtg_file, new_mtg_file, csv_file)
         # Compute extra data:
         compute_data_mtg!(mtg)
     else
+        isnothing(mtg[:diameter_mm]) && return nothing # We don't have the lidar point cloud for some branches (they are bad because of wind, so no idea of the base diameter)
         #! The diameter was not measured on these branches, we use the one from the point cloud, which is in m but named "_mm"...
         mtg[:diameter] = mtg[:diameter_mm] * 1000.0
         # transform!(mtg, :circonference_mm => (x -> (x / 10) / π) => :diameter, ignore_nothing=true) # diameter of the segment in mm
@@ -380,107 +380,6 @@ function bind_csv_files(csv_files)
 
     return df
 end
-
-
-
-###############################################
-# Functions used in 3-mtg_plantscan3d_to_segments
-###############################################
-
-function segmentize_mtgs(in_folder, out_folder)
-    # Listing the mtg files in the folder:
-    mtg_files = filter(x -> splitext(basename(x))[2] in [".mtg"], readdir(in_folder))
-
-    # Modifying the format of the MTG to match the one from the field, i.e. with segments and axis instead of nodes
-    for i in mtg_files
-        enrich_plantscan3d_mtg(
-            joinpath(in_folder, i),
-            joinpath(out_folder, i),
-        )
-    end
-end
-
-"""
-    segmentize_mtg(in_file, out_file)
-
-Transform the input mtg from plantscan3d into an mtg with segments and axis. Segments are
-nodes describing the portion of the branch between two branching points. Axis is the
-upper-scale grouping following segments, *i.e.* segments with a "/" or "<" link.
-"""
-function enrich_plantscan3d_mtg(in_file, out_file)
-    # in_folder = joinpath("0-data", "3-mtg_lidar_plantscan3d", "1-raw_output")
-    # out_folder = joinpath("0-data", "3-mtg_lidar_plantscan3d", "3-raw_output_segmentized")
-    # out_file = joinpath(out_folder, mtg_files[1])
-    # in_file = joinpath(in_folder, mtg_files[1])
-    mtg = read_mtg(in_file)
-
-    # Compute internode length and then cumulate the lenghts when deleting.
-
-    # Step 1: computes the length of each node:
-    transform!(mtg, compute_length_coord => :length, scale=2) # length is in meters
-
-    # Step 2: cumulate the length of all nodes in a segment for each segment node:
-    transform!(mtg, cumul_length_segment => :length, scale=2, filter_fun=is_seg)
-    # And add a lenght of 0 for the first segment:
-    mtg[1][:length] = 0.0
-
-    # Step 3: delete nodes to make the mtg as the field measurements: with nodes only at in_filtering points
-    mtg = delete_nodes!(mtg, filter_fun=is_segment!, scale=(1, 2))
-
-    # Insert a new scale: the Axis.
-    # First step we put all nodes at scale 3 instead of 2:
-    transform!(mtg, (node -> scale!(node, 3)), scale=2)
-    mtg[:scales] = scales(mtg)
-    # 2nd step, we add axis nodes (scale 2) branching each time there's a branching node:
-    template = MutableNodeMTG("+", "A", 0, 2)
-    insert_parents!(mtg, template, scale=3, link="+")
-    # And before the first node decomposing the plant:
-    insert_parents!(mtg, NodeMTG("/", "A", 1, 2), scale=3, link="/", all=false)
-
-    # 3d step, we change the branching nodes links to decomposition:
-    transform!(mtg, (node -> link!(node, "/")), scale=3, link="+")
-
-    # Fourth step, we rename the nodes symbol into segments "S":
-    transform!(mtg, (node -> symbol!(node, "S")), symbol="N")
-
-    # And the plant symbol as the plant name:
-    symbol_from_file = splitext(replace(basename(out_file), "_" => ""))[1]
-
-    # If the file name ends with a number we need to add something to not mistake it with an index
-    if match(r"[0-9]+$", symbol_from_file) !== nothing
-        symbol_from_file *= "whole"
-    end
-
-    symbol!(mtg, symbol_from_file)
-
-    # Updating the symbols in the root node:
-    mtg[:symbols] = symbols(mtg)
-
-    # Last step, we add the index as in the field, *i.e.* the axis nodes are indexed following
-    # their topological order, and the segments are indexed following their position on the axis:
-    transform!(mtg, (x -> 1) => :index, symbol="A")
-    transform!(mtg, A_indexing => :index, symbol="A")
-    transform!(mtg, (node -> index!(node, node[:index])), symbol="A")
-
-    # NB: this is done in 3 steps because the index is not a node attribute at first (it
-    # is in the MTG field). So we first initialize the index to 1, then we update it with the
-    # indexing function (A_indexing), then we update the index from the MTG field with the
-    # index attribute.
-
-    # Remove the index from the nodes attributes (only temporary):
-    traverse!(mtg, node -> pop!(node, :index))
-
-    # Set back the root node with no indexing:
-    index!(mtg, -9999)
-    transform!(mtg, (node -> index!(node, S_indexing(node))), scale=3)
-
-    # Delete the old length of the nodes (length_node) from the attributes:
-    transform!(mtg, (x -> x[:length_node] === nothing ? nothing : pop!(getfield(x, :attributes), :length_node)))
-
-    # Write MTG back to file:
-    write_mtg(out_file, mtg)
-end
-
 
 """
     compute_length_coord(node)
