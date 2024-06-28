@@ -128,12 +128,8 @@ First, we define which variables will be used in our model. In our case we will 
 """
 
 # ╔═╡ 3d0a6b24-f11b-4f4f-b59b-5c40ea9be838
-#formula_all = @formula(cross_section ~ 0 + cross_section_pipe + pathlength_subtree + segment_index_on_axis)
-#formula_all = @formula(cross_section ~ 0 + cross_section_pipe +  segment_index_on_axis + axis_length)
-# formula_all = @formula(cross_section ~ 0 + cross_section_pipe + number_leaves + segment_subtree)
-#formula_all = @formula(cross_section ~ 0 + cross_section_pipe + pathlength_subtree + branching_order + segment_index_on_axis + axis_length + number_leaves + segment_subtree + n_segments_axis)
-
-formula_all = @formula(cross_section ~ 0 + cross_section_pipe + axis_length + n_segments_axis + segment_index_on_axis  + number_leaves + segment_subtree)
+#formula_all = @formula(cross_section ~ 0 + cross_section_pipe + axis_length + n_segments_axis + segment_index_on_axis  + number_leaves + segment_subtree)
+formula_all = @formula(cross_section ~ 0 + cross_section_pipe + axis_length + number_leaves + segment_subtree)
 
 # ╔═╡ b8800a04-dedb-44b3-82fe-385e3db1d0d5
 md"""
@@ -3051,7 +3047,7 @@ version = "3.5.0+0"
 # ╟─21fd863d-61ed-497e-ba3c-5f327e354cee
 # ╟─371522b4-b74c-483b-aff6-cbfe65e95fa6
 # ╟─0195ac30-b64f-409a-91ad-e68cf37d7c3b
-# ╠═77486fa7-318d-4397-a792-70fd8d2148e3
+# ╟─77486fa7-318d-4397-a792-70fd8d2148e3
 # ╟─84af5ab6-74b9-4231-8ac8-1b1b9018ccf9
 # ╟─c04e308c-bc7c-473d-a7d2-5104bfe1d934
 # ╟─4eeac17e-26a0-43c8-ab3e-358d4421a1b7
