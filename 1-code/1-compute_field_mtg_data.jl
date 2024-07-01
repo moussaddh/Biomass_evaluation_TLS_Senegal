@@ -14,18 +14,19 @@ using .BiomassFromLiDAR
 # Listing the mtg files in xlsx/xlsm format:
 mtg_files_acacia =
     filter(
-        x -> splitext(basename(x))[2] in [".xlsx", ".xlsm"],
+        x -> splitext(basename(x))[2] in [".xlsx", ".xlsm"] && !startswith(basename(x), "~"),
         readdir(joinpath("0-data", "1.0-mtg_manual_measurement_corrected", "acacia"), join=true)
     )
 
 mtg_files_faidherbia =
     filter(
-        x -> splitext(basename(x))[2] in [".xlsx", ".xlsm"],
+        x -> splitext(basename(x))[2] in [".xlsx", ".xlsm"] && !startswith(basename(x), "~"),
         readdir(joinpath("0-data", "1.0-mtg_manual_measurement_corrected", "faidherbia"), join=true)
     )
 
+
 # Computing new variables for each mtg and saving the results in "0-data/5-enriched_manual_mtg":
-for (species, f) in ["faidherbia" => mtg_files_faidherbia, "accacia" => mtg_files_acacia]
+for (species, f) in ["faidherbia" => mtg_files_faidherbia, "acacia" => mtg_files_acacia]
     for i in f
         println("Computing branch $(splitext(basename(i))[1])")
 
