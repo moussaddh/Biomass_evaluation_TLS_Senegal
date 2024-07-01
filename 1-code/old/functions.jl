@@ -215,6 +215,8 @@ function compute_all_mtg_data(mtg_file, new_mtg_file, csv_file)
 
         # Compute extra data:
         compute_data_mtg(mtg)
+    else
+        mtg.cross_section = compute_cross_section(mtg)
     end
     # write the resulting mtg to disk:
     write_mtg(new_mtg_file, mtg)
@@ -330,21 +332,21 @@ function segmentize_mtgs(in_folder, out_folder)
 end
 
 """
-    segmentize_mtg(in_file, out_file)
+    enrich_plantscan3d_mtg(in_file, out_file)
 
 Transform the input mtg from plantscan3d into an mtg with segments and axis. Segments are
 nodes describing the portion of the branch between two branching points. Axis is the
 upper-scale grouping following segments, *i.e.* segments with a "/" or "<" link.
 """
-function segmentize_mtg(in_file, out_file)
+function enrich_plantscan3d_mtg(in_file, out_file)
     mtg = read_mtg(in_file)
     # Compute internode length and then cumulate the lenghts when deleting.
 
     # Step 1: computes the length of each node:
-    @mutate_mtg!(mtg, length_node = compute_length_coord(node), scale = 2) # length is in meters
+    transform!(mtg, compute_length_coord => :length_node, scale=2) # length is in meters
 
     # Step 3: cumulate the length of all nodes in a segment for each segment node:
-    @mutate_mtg!(mtg, length = cumul_length_segment(node), scale = 2, filter_fun = is_seg)
+    transform!(mtg, cumul_length_segment => :length, scale=2, filter_fun=is_seg)
     # And add a lenght of 0 for the first segment:
     mtg[1][:length] = 0.0
 
@@ -376,35 +378,6 @@ function segmentize_mtg(in_file, out_file)
             end
         end
     end
-
-    # Step 4: delete nodes to make the mtg as the field measurements: with nodes only at in_filtering points
-    mtg = delete_nodes!(mtg, filter_fun=is_segment!, scale=(1, 2))
-
-    # Insert a new scale: the Axis.
-    # First step we put all nodes at scale 3 instead of 2:
-    @mutate_mtg!(mtg, node.MTG.scale = 3, scale = 2)
-
-    # 2nd step, we add axis nodes (scale 2) branching each time there's a branching node:
-    template = MutableNodeMTG("+", "A", 0, 2)
-    insert_parents!(mtg, template, scale=3, link="+")
-    # And before the first node decomposing the plant:
-    insert_parents!(mtg, NodeMTG("/", "A", 1, 2), scale=3, link="/", all=false)
-
-    # 3d step, we change the branching nodes links to decomposition:
-    @mutate_mtg!(mtg, node.MTG.link = "/", scale = 3, link = "+")
-
-    # Fourth step, we rename the nodes symbol into segments "S":
-    @mutate_mtg!(mtg, node.MTG.symbol = "S", symbol = "N")
-
-    # And the plant symbol as the plant name:
-    symbol_from_file = splitext(replace(basename(out_file), "_" => ""))[1]
-
-    # If the file name ends with a number we need to add something to not mistake it with an index
-    if match(r"[0-9]+$", symbol_from_file) !== nothing
-        symbol_from_file *= "whole"
-    end
-
-    mtg.MTG.symbol = symbol_from_file
 
     # Last step, we add the index as in the field, *i.e.* the axis nodes are indexed following
     # their topological order, and the segments are indexed following their position on the axis:
