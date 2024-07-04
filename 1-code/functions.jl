@@ -8,8 +8,9 @@ using DataFrames
 export compute_all_mtg_data
 export bind_csv_files
 export compute_volume
-export NRMSE, RMSE, EF, nRMSE
+# export RMSE, EF, nRMSE
 export structural_model!
+export compute_structural_predictors!
 
 function structural_model!(mtg, fresh_density, dry_density, first_cross_section=nothing; model=structural_model_faidherbia)
     if (:radius in names(mtg))
@@ -472,15 +473,84 @@ function S_indexing(node)
     end
 end
 
-# function cross_section_stat_mod_all(node; symbol="N")
-#     max(
-#         0.0,
-#         0.520508 * node[:cross_section_pipe] + 0.0153365 * node[:pathlength_subtree] +
-#         6.38394 * node[:branching_order] + 10.9389 * node[:segment_index_on_axis] - 10.137 * node[:number_leaves] +
-#         4.46843 * node[:segment_subtree]
-#     )
-# end
+function compute_axis_length!(mtg)
+    # First we compute the axis length for each first node of an axis:
+    traverse!(mtg, link=("/", "+"), symbol="N") do axis_first_node
+        axis_children_lengths = descendants(axis_first_node, :length, link="<", all=false, ignore_nothing=true)
+        axis_children_length = length(axis_children_lengths) > 0 ? sum(axis_children_lengths) : 0
+        axis_first_node[:axis_length] = axis_children_length + axis_first_node[:length]
+    end
+
+    # Then we attribute this value to all nodes that are on the axis
+    transform!(mtg, (node -> first(ancestors(node, :axis_length, link=("/", "+")))) => :axis_length, link="<", symbol="N")
+
+    return nothing
 end
+
+function compute_n_segments_axis!(mtg)
+    # First we compute the number of nodes along the axis for each first node of an axis:
+    traverse!(mtg, link=("/", "+"), symbol="N") do axis_first_node
+        axis_children_nodes = descendants(axis_first_node, link="<", all=false)
+        axis_first_node[:n_segments_axis] = length(axis_children_nodes) + 1
+    end
+
+    # Then we attribute this value to all nodes that are on the axis
+    transform!(mtg, (node -> first(ancestors(node, :n_segments_axis, link=("/", "+")))) => :n_segments_axis, link="<", symbol="N")
+    return nothing
+end
+
+"""
+    compute_structural_predictors!(mtg)
+
+Compute the variables used as predictors for the structural model:
+
+- `length`: the length of the segment in mm
+- `pathlength_subtree`: the total length of the segment and its descendants in mm
+- `axis_length`: the total length of the axis in mm
+- `segment_index_on_axis`: the index of the segment on the axis
+- `segment_subtree`: the total length of the segment and its descendants in mm
+- `number_leaves`: the number of leaves in the segment
+- `branching_order`: the branching order of the segment
+"""
+function compute_structural_predictors!(mtg)
+    transform!(
+        mtg,
+        compute_length_coord => :length,
+        :length => (x -> x * 1000) => :length,
+        symbol="N"
+    ) # length is in mm
+
+
+    transform!(
+        mtg,
+        (node -> sum(filter(x -> x !== nothing, descendants!(node, :length, symbol="N", self=true)))) => :pathlength_subtree,
+    )
+
+    compute_axis_length!(mtg)
+    compute_n_segments_axis!(mtg)
+
+    # Identify which node is a segment root:
+    transform!(mtg, is_seg => :is_segment, symbol="N")
+    transform!(mtg, segment_index_on_axis => :segment_index_on_axis, symbol="N")
+
+    transform!(
+        mtg,
+        (node -> length(descendants!(node, :length, symbol="N", self=true, filter_fun=is_seg))) => :segment_subtree,
+        nleaves! => :number_leaves,
+        symbol="N"
+    )
+
+    branching_order!(mtg, ascend=false)
+
+    # Total branch length
+    mtg[:total_length] = mtg[:pathlength_subtree]
+
+    # Clean-up the cached variables:
+    clean_cache!(mtg)
+
+    return nothing
+end
+end # end module
 
 
 function cylinder_from_radius(node::MultiScaleTreeGraph.Node, xyz_attr=[:XX, :YY, :ZZ]; radius=:radius, symbol="S")
